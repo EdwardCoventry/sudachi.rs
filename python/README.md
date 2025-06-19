@@ -11,7 +11,7 @@ This is not a pure Python implementation, but bindings for the
 
 ## Binary wheels
 
-We provide binary builds for macOS (10.14+), Windows and Linux only for x86_64 architecture.
+We provide binary builds for macOS (10.14+), Windows and Linux x86_64/aarch64 architecture.
 x86 32-bit architecture is not supported and is not tested.
 MacOS source builds seem to work on ARM-based (Aarch64) Macs,
 but this architecture also is not tested and require installing Rust toolchain and Cargo.
