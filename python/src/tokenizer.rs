@@ -151,7 +151,7 @@ impl PyTokenizer {
         mode: Option<&Bound<'py, PyAny>>,
         logger: Option<Py<PyAny>>,
         out: Option<Bound<'py, PyMorphemeListWrapper>>,
-    ) -> PyResult<Bound<PyMorphemeListWrapper>> {
+    ) -> PyResult<Bound<'py, PyMorphemeListWrapper>> {
         // restore default mode on scope exit
         let mode = match mode {
             None => None,

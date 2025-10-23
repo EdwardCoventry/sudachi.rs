@@ -430,7 +430,7 @@ impl PyDictionary {
     ///
     /// :type pos_id: int
     #[pyo3(text_signature = "(self, /, pos_id: int) -> tuple[str, str, str, str, str, str] | None")]
-    fn pos_of<'py>(&'py self, py: Python<'py>, pos_id: usize) -> Option<&Bound<'py, PyTuple>> {
+    fn pos_of<'py>(&'py self, py: Python<'py>, pos_id: usize) -> Option<&'py Bound<'py, PyTuple>> {
         let dic = self.dictionary.as_ref().unwrap();
         dic.pos.get(pos_id).map(|x| x.bind(py))
     }

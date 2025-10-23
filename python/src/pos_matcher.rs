@@ -232,7 +232,7 @@ impl PyPosIter {
         slf
     }
 
-    fn __next__<'py>(&'py mut self, py: Python<'py>) -> Option<&Bound<'py, PyTuple>> {
+    fn __next__<'py>(&'py mut self, py: Python<'py>) -> Option<&'py Bound<'py, PyTuple>> {
         let idx = self.index;
         self.index += 1;
         if idx >= self.data.len() {
