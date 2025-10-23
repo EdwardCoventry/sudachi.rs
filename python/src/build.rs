@@ -58,7 +58,7 @@ fn create_file(p: &Path) -> std::io::Result<File> {
 ///
 /// :param matrix: Path to the matrix file.
 /// :param lex: List of paths to lexicon files.
-/// :param output: Path to output built dictionray.
+/// :param output: Path to output built dictionary.
 /// :param description: A description text to embed in the dictionary.
 /// :return: A build report, list of (part, size, time).
 ///
@@ -107,7 +107,7 @@ fn build_system_dic<'py>(
 ///
 /// :param system: Path to the system dictionary.
 /// :param lex: List of paths to lexicon files.
-/// :param output: Path to output built dictionray.
+/// :param output: Path to output built dictionary.
 /// :param description: A description text to embed in the dictionary.
 /// :return: A build report, list of (part, size, time).
 ///

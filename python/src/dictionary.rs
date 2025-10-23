@@ -47,7 +47,7 @@ pub(crate) struct PyDicData {
     pub(crate) pos: Vec<Py<PyTuple>>,
     /// Compute default string representation for a morpheme using vtable dispatch.
     /// None by default (if outputting surface as it is)
-    /// This is default per-dictionary value, can be overriden when creating tokenizers and pre-tokenizers
+    /// This is default per-dictionary value, can be overridden when creating tokenizers and pre-tokenizers
     pub(crate) projection: PyProjector,
 }
 
