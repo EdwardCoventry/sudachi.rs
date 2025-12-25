@@ -67,6 +67,11 @@ fn make_system_specific_name(s: &str) -> String {
     format!("lib{}.dylib", s)
 }
 
+#[cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
+fn make_system_specific_name(_s: &str) -> String {
+    String::new()
+}
+
 fn system_specific_name(s: &str) -> Option<String> {
     if s.contains('.') {
         None
