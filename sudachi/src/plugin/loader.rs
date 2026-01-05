@@ -68,6 +68,10 @@ fn make_system_specific_name(s: &str) -> String {
 }
 
 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
+// Apple embedded platforms do not support dynamic library loading (DSO plugins)
+// due to platform security restrictions. Returning an empty string here
+// effectively disables loading plugins from DSOs, while still allowing
+// plugins bundled with the application/binary to work as expected.
 fn make_system_specific_name(_s: &str) -> String {
     String::new()
 }
