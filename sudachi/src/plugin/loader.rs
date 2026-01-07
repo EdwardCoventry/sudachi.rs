@@ -67,7 +67,12 @@ fn make_system_specific_name(s: &str) -> Option<String> {
     Some(format!("lib{}.dylib", s))
 }
 
-#[cfg(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
+#[cfg(any(
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+))]
 // Apple embedded platforms do not support dynamic library loading (DSO plugins)
 // due to platform security restrictions. Returning None here
 // effectively disables loading plugins from DSOs, while still allowing
