@@ -82,6 +82,14 @@ impl<'a> LexiconSet<'a> {
 }
 
 impl LexiconSet<'_> {
+    pub fn num_lexicons(&self) -> usize {
+        self.lexicons.len()
+    }
+
+    pub fn lexicon_size(&self, dict_id: usize) -> Option<u32> {
+        self.lexicons.get(dict_id).map(|l| l.size())
+    }
+
     /// Returns iterator which yields all words in the dictionary, starting from the `offset` bytes
     ///
     /// Searches dictionaries in the reverse order: user dictionaries first and then system dictionary
@@ -145,8 +153,9 @@ impl LexiconSet<'_> {
     fn update_dict_id(split: &mut Vec<WordId>, dict_id: u8) -> SudachiResult<()> {
         for id in split.iter_mut() {
             let cur_dict_id = id.dic();
-            if cur_dict_id > 0 {
-                // update if target word is not in system_dict
+            if cur_dict_id == 1 {
+                // User dictionaries store local references with dic_id=1.
+                // Keep explicit cross-lex ids (dic_id >= 2) untouched.
                 *id = WordId::checked(dict_id, id.word())?;
             }
         }

@@ -75,7 +75,7 @@ class Dictionary:
 
     @classmethod
     def __init__(cls, config_path: Optional[str | Config] = ..., resource_dir: Optional[str] = ..., dict: Optional[str] = None,
-                 dict_type: Optional[str] = None, *, config: Optional[str | Config] = ...) -> None:
+                 dict_type: Optional[str] = None, *, config: Optional[str | Config] = ..., user_data: Optional[List[bytes]] = ...) -> None:
         """
         Creates a sudachi dictionary.
 
@@ -89,6 +89,7 @@ class Dictionary:
         :param dict: type of pre-packaged system dictionary, referring to sudachidict_<dict> packages on PyPI: https://pypi.org/search/?q=sudachidict.
             Also, can be an _absolute_ path to a compiled dictionary file.
         :param dict_type: deprecated alias to dict.
+        :param user_data: optional additional compiled user dictionary binaries to load from memory.
         """
         ...
 
@@ -169,6 +170,24 @@ class Dictionary:
         :param surface: find all morphemes with the given surface
         :param out: if passed, reuse the given morpheme list instead of creating a new one.
             See https://worksapplications.github.io/sudachi.rs/python/topics/out_param.html for details.
+        """
+        ...
+
+    def word_info(self, word_id: int) -> WordInfo:
+        """
+        Return word info by word id.
+
+        Accepts both:
+        - packed Sudachi word id (dictionary id in high 4 bits and row id in low 28 bits)
+        - legacy id format (`lex_id * 10**8 + relative_word_id`)
+        """
+        ...
+
+    def dictionary_sizes(self) -> Tuple[int, ...]:
+        """
+        Return per-dictionary lexicon sizes.
+
+        The first element is the system dictionary size and subsequent elements are user dictionaries.
         """
         ...
 
@@ -285,7 +304,24 @@ class Morpheme:
 
     def word_id(self) -> int:
         """
-        Returns word id of this word in the dictionary.
+        Returns legacy-style word id of this word in the dictionary.
+
+        The value is the relative row id for system dictionary words, and
+        `lex_id * 10**8 + relative_word_id` for user dictionary words.
+        """
+        ...
+
+    def word_id_relative(self) -> int:
+        """
+        Returns the relative row id inside the source lexicon.
+        """
+        ...
+
+    def word_id_packed(self) -> int:
+        """
+        Returns packed Sudachi word id.
+
+        This is the low-level id with dictionary id in high 4 bits and row id in low 28 bits.
         """
         ...
 
@@ -361,6 +397,24 @@ class Tokenizer:
         """
         ...
 
+    def tokenize_reading_candidates(
+        self,
+        text: str,
+        reading: str,
+        max_results: int = 64,
+        min_tokens: int = 1,
+    ) -> List[dict]:
+        """
+        Enumerate tokenization candidates whose concatenated reading_form exactly matches `reading`.
+
+        Returns candidates sorted by total path cost in ascending order.
+        Each candidate is a dict with:
+        - ``total_cost``: int
+        - ``tokens``: list[dict] with surface/reading and word-id fields
+        - ``min_tokens`` allows excluding single-token candidates (e.g. set to 2)
+        """
+        ...
+
     @property
     def mode(self) -> SplitMode:
         """
@@ -371,10 +425,18 @@ class Tokenizer:
 
 
 class WordInfo:
+    word_id: ClassVar[int] = ...
+    word_id_packed: ClassVar[int] = ...
+    word_id_relative: ClassVar[int] = ...
+    lex_id: ClassVar[int] = ...
+    dictionary_id: ClassVar[int] = ...
     a_unit_split: ClassVar[List[int]] = ...
     b_unit_split: ClassVar[List[int]] = ...
     dictionary_form: ClassVar[str] = ...
     dictionary_form_word_id: ClassVar[int] = ...
+    dictionary_form_word_id_packed: ClassVar[int] = ...
+    dictionary_form_word_id_relative: ClassVar[int] = ...
+    dictionary_form_lex_id: ClassVar[int] = ...
     head_word_length: ClassVar[int] = ...
     normalized_form: ClassVar[str] = ...
     pos_id: ClassVar[int] = ...
@@ -430,3 +492,24 @@ class PosMatcher:
         Returns a POS matcher which matches all POS tags except ones defined in the current POS matcher.
         """
         ...
+
+
+def build_system_dic(matrix: str | bytes, lex: List[str | bytes], output: str, description: Optional[str] = ...) -> List[Tuple[str, int, float]]:
+    """
+    Build a system dictionary from matrix and lexicon CSV data.
+    """
+    ...
+
+
+def build_user_dic(system: str, lex: List[str | bytes], output: str, description: Optional[str] = ...) -> List[Tuple[str, int, float]]:
+    """
+    Build a user dictionary and write it to disk.
+    """
+    ...
+
+
+def build_user_dic_bytes(system: str, lex: List[str | bytes], description: Optional[str] = ...) -> Tuple[List[Tuple[str, int, float]], bytes]:
+    """
+    Build a user dictionary and return compiled dictionary bytes in memory.
+    """
+    ...

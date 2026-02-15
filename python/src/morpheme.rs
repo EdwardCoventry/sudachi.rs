@@ -31,6 +31,7 @@ use crate::projection::{MorphemeProjection, PyProjector};
 use crate::word_info::PyWordInfo;
 
 pub(crate) type PyMorphemeList = MorphemeList<Arc<PyDicData>>;
+const LEGACY_LEX_STRIDE: i32 = 100_000_000;
 
 /// A list of morphemes.
 ///
@@ -425,9 +426,39 @@ impl PyMorpheme {
         self.morph(py).is_oov()
     }
 
-    /// Returns word id of this word in the dictionary.
+    /// Returns legacy-style word id of this word in the dictionary.
+    ///
+    /// System dictionary ids are relative row ids.
+    /// User dictionary ids are encoded as lex_id * 10**8 + relative row id.
     #[pyo3(text_signature = "(self, /) -> int")]
-    fn word_id(&self, py: Python) -> u32 {
+    fn word_id(&self, py: Python) -> i32 {
+        let word_id = self.morph(py).word_id();
+        if word_id.is_oov() {
+            return -1;
+        }
+        let lex_id = word_id.dic() as i32;
+        let relative_word_id = word_id.word() as i32;
+        if lex_id <= 0 {
+            relative_word_id
+        } else {
+            lex_id * LEGACY_LEX_STRIDE + relative_word_id
+        }
+    }
+
+    /// Returns the relative row id inside the source lexicon.
+    #[pyo3(text_signature = "(self, /) -> int")]
+    fn word_id_relative(&self, py: Python) -> i32 {
+        let word_id = self.morph(py).word_id();
+        if word_id.is_oov() {
+            -1
+        } else {
+            word_id.word() as i32
+        }
+    }
+
+    /// Returns packed Sudachi word id (dictionary id in high 4 bits and row id in low 28 bits).
+    #[pyo3(text_signature = "(self, /) -> int")]
+    fn word_id_packed(&self, py: Python) -> u32 {
         self.morph(py).word_id().as_raw()
     }
 
@@ -457,7 +488,11 @@ impl PyMorpheme {
     #[pyo3(text_signature = "(self, /) -> WordInfo")]
     fn get_word_info(&self, py: Python) -> PyResult<PyWordInfo> {
         errors::warn_deprecation(py, c_str!("Users should not touch the raw WordInfo."))?;
-        Ok(self.morph(py).get_word_info().clone().into())
+        let morph = self.morph(py);
+        Ok(PyWordInfo::from_word_info(
+            morph.get_word_info().clone(),
+            morph.word_id(),
+        ))
     }
 
     /// Returns morpheme length in codepoints.

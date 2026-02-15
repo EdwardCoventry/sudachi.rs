@@ -18,6 +18,7 @@ use crate::analysis::created::CreatedWords;
 use crate::analysis::inner::{Node, NodeIdx};
 use crate::analysis::lattice::Lattice;
 use crate::analysis::node::{LatticeNode, ResultNode};
+use crate::analysis::reading_candidates::{enumerate_reading_candidates, ReadingCandidatePath};
 use crate::analysis::stateless_tokenizer::{dump_path, split_path, DictionaryAccess};
 use crate::analysis::Mode;
 use crate::dic::category_type::CategoryType;
@@ -244,6 +245,36 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
                 self.subset,
             )),
         }
+    }
+
+    /// Enumerate tokenization paths whose concatenated reading equals `reading`.
+    /// Paths are sorted by total cost in ascending order.
+    pub fn reading_candidates(
+        &self,
+        reading: &str,
+        max_results: usize,
+    ) -> SudachiResult<Vec<ReadingCandidatePath>> {
+        self.reading_candidates_with_min_tokens(reading, max_results, 1)
+    }
+
+    /// Enumerate tokenization paths whose concatenated reading equals `reading`.
+    /// Paths are sorted by total cost in ascending order.
+    pub fn reading_candidates_with_min_tokens(
+        &self,
+        reading: &str,
+        max_results: usize,
+        min_tokens: usize,
+    ) -> SudachiResult<Vec<ReadingCandidatePath>> {
+        enumerate_reading_candidates(
+            &self.lattice,
+            &self.input,
+            self.dictionary.lexicon(),
+            self.dictionary.grammar().conn_matrix(),
+            self.subset,
+            reading,
+            max_results,
+            min_tokens,
+        )
     }
 }
 

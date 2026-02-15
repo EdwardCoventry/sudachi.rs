@@ -889,6 +889,7 @@ dependencies = [
 name = "sudachipy"
 version = "0.6.11-a1"
 dependencies = [
+ "memmap2",
  "pyo3",
  "scopeguard",
  "sudachi",

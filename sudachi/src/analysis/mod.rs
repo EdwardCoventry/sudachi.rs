@@ -27,6 +27,7 @@ pub mod lattice;
 pub mod mlist;
 pub mod morpheme;
 pub mod node;
+pub mod reading_candidates;
 pub mod stateful_tokenizer;
 pub mod stateless_tokenizer;
 

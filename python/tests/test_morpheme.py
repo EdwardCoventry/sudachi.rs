@@ -94,9 +94,13 @@ class TestTokenizer(unittest.TestCase):
     def test_morpheme_word_id(self):
         m = self.tokenizer_obj.tokenize('京都')[0]
         self.assertEqual(m.word_id(), 3)
+        self.assertEqual(m.word_id_relative(), 3)
+        self.assertEqual(m.word_id_packed(), 3)
 
         m = self.tokenizer_obj.tokenize('ぴらる')[0]
-        self.assertEqual(m.word_id(), 2**28 + 0)
+        self.assertEqual(m.word_id(), 100000000)
+        self.assertEqual(m.word_id_relative(), 0)
+        self.assertEqual(m.word_id_packed(), 2**28 + 0)
 
     def test_morpheme_oov(self):
         m = self.tokenizer_obj.tokenize('京都')[0]

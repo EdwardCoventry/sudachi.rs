@@ -80,6 +80,20 @@ pub struct Lattice {
 }
 
 impl Lattice {
+    /// Number of boundaries in the current lattice.
+    /// For non-empty input this equals `char_len + 1`.
+    pub fn boundary_count(&self) -> usize {
+        self.size
+    }
+
+    /// Nodes whose end boundary is `boundary`.
+    pub fn nodes_ending_at(&self, boundary: usize) -> &[Node] {
+        self.ends_full
+            .get(boundary)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
     fn reset_vec<T>(data: &mut Vec<Vec<T>>, target: usize) {
         for v in data.iter_mut() {
             v.clear();

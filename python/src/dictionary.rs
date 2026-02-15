@@ -16,13 +16,15 @@
 
 use std::convert::TryFrom;
 use std::fmt::Write;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use memmap2::Mmap;
 use pyo3::ffi::c_str;
 use pyo3::prelude::*;
-use pyo3::types::{PySet, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyList, PySet, PyString, PyTuple};
 
 use sudachi::analysis::stateless_tokenizer::DictionaryAccess;
 use sudachi::analysis::Mode;
@@ -30,7 +32,9 @@ use sudachi::config::{Config, ConfigBuilder, SurfaceProjection};
 use sudachi::dic::dictionary::JapaneseDictionary;
 use sudachi::dic::grammar::Grammar;
 use sudachi::dic::lexicon_set::LexiconSet;
+use sudachi::dic::storage::{Storage, SudachiDicData};
 use sudachi::dic::subset::InfoSubset;
+use sudachi::dic::word_id::WordId;
 use sudachi::plugin::input_text::InputTextPlugin;
 use sudachi::plugin::oov::OovProviderPlugin;
 use sudachi::plugin::path_rewrite::PathRewritePlugin;
@@ -41,6 +45,9 @@ use crate::pos_matcher::PyPosMatcher;
 use crate::pretokenizer::PyPretokenizer;
 use crate::projection::{pyprojection, PyProjector};
 use crate::tokenizer::{PySplitMode, PyTokenizer};
+use crate::word_info::PyWordInfo;
+
+const LEGACY_LEX_STRIDE: u32 = 100_000_000;
 
 pub(crate) struct PyDicData {
     pub(crate) dictionary: JapaneseDictionary,
@@ -97,6 +104,7 @@ impl PyDicData {
 /// :type resource_dir: pathlib.Path | str | None
 /// :type dict: pathlib.Path | str | None
 /// :type dict_type: pathlib.Path | str | None
+/// :type user_data: list[bytes] | None
 #[pyclass(module = "sudachipy.dictionary", name = "Dictionary")]
 #[derive(Clone)]
 pub struct PyDictionary {
@@ -124,10 +132,11 @@ impl PyDictionary {
     /// :type resource_dir: pathlib.Path | str | None
     /// :type dict: pathlib.Path | str | None
     /// :type dict_type: pathlib.Path | str | None
+    /// :type user_data: list[bytes] | None
     #[new]
     #[pyo3(
-        text_signature="(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None) -> Dictionary",
-        signature=(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None)
+        text_signature="(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None, user_data=None) -> Dictionary",
+        signature=(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None, user_data=None)
     )]
     fn new(
         py: Python,
@@ -136,6 +145,7 @@ impl PyDictionary {
         dict: Option<&str>,
         dict_type: Option<&str>,
         config: Option<&Bound<PyAny>>,
+        user_data: Option<&Bound<PyList>>,
     ) -> PyResult<Self> {
         if config.is_some() && config_path.is_some() {
             return errors::wrap(Err("Both config and config_path options were specified at the same time, use one of them"));
@@ -202,10 +212,19 @@ impl PyDictionary {
             }
         }
 
-        let jdic = errors::wrap_ctx(
-            JapaneseDictionary::from_cfg(&config),
-            "Error while constructing dictionary",
-        )?;
+        let jdic = match user_data {
+            Some(data) => {
+                let storage = build_storage_from_config(&config, Some(data))?;
+                errors::wrap_ctx(
+                    JapaneseDictionary::from_cfg_storage(&config, storage),
+                    "Error while constructing dictionary",
+                )?
+            }
+            None => errors::wrap_ctx(
+                JapaneseDictionary::from_cfg(&config),
+                "Error while constructing dictionary",
+            )?,
+        };
 
         let pos_data = jdic
             .grammar()
@@ -417,6 +436,52 @@ impl PyDictionary {
         Ok(l)
     }
 
+    /// Return word info by word id.
+    ///
+    /// Supports both packed Sudachi ids (dictionary id in high 4 bits and
+    /// row id in low 28 bits) and legacy ids (lex_id * 10**8 + row id).
+    #[pyo3(text_signature = "(self, /, word_id: int) -> WordInfo")]
+    fn word_info(&self, word_id: u32) -> PyResult<PyWordInfo> {
+        let max_dict_id = self.config.user_dicts.len() + 1;
+        let word_id = unpack_word_id(word_id, max_dict_id)?;
+        let dic = self.dictionary.as_ref().unwrap();
+        let lexicon = dic.dictionary.lexicon();
+        let dict_id = word_id.dic() as usize;
+        let lexicon_size = lexicon
+            .lexicon_size(dict_id)
+            .expect("validated dictionary id should always exist");
+        if word_id.word() >= lexicon_size {
+            return errors::wrap(Err(format!(
+                "word id {} has lex row {} out of range for dictionary {} (size={})",
+                word_id.as_raw(),
+                word_id.word(),
+                dict_id,
+                lexicon_size
+            )));
+        }
+
+        let info = errors::wrap_ctx(lexicon.get_word_info(word_id), &word_id)?;
+        Ok(PyWordInfo::from_word_info(info, word_id))
+    }
+
+    /// Return per-dictionary lexicon sizes.
+    ///
+    /// The first element is the system dictionary size and subsequent elements are user dictionaries.
+    #[pyo3(text_signature = "(self, /) -> tuple[int, ...]")]
+    fn dictionary_sizes<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let dic = self.dictionary.as_ref().unwrap();
+        let lexicon = dic.dictionary.lexicon();
+
+        let mut sizes = Vec::with_capacity(lexicon.num_lexicons());
+        for dict_id in 0..lexicon.num_lexicons() {
+            let size = lexicon
+                .lexicon_size(dict_id)
+                .expect("dict id in range should always exist");
+            sizes.push(size as usize);
+        }
+        PyTuple::new(py, sizes)
+    }
+
     /// Close this dictionary.
     #[pyo3(text_signature = "(self, /) -> ()")]
     fn close(&mut self) {
@@ -462,6 +527,79 @@ fn config_repr(cfg: &Config) -> Result<String, std::fmt::Error> {
     }
     write!(result, "])>")?;
     Ok(result)
+}
+
+fn map_file(path: &Path) -> PyResult<Storage> {
+    let file = errors::wrap_ctx(File::open(path), path)?;
+    let mapping = errors::wrap_ctx(unsafe { Mmap::map(&file) }, path)?;
+    Ok(Storage::File(mapping))
+}
+
+fn build_storage_from_config(
+    config: &Config,
+    user_data: Option<&Bound<'_, PyList>>,
+) -> PyResult<SudachiDicData> {
+    let system_path = errors::wrap(config.resolved_system_dict())?;
+    let mut storage = SudachiDicData::new(map_file(&system_path)?);
+
+    let user_paths = errors::wrap(config.resolved_user_dicts())?;
+    for user_path in user_paths {
+        storage.add_user(map_file(&user_path)?);
+    }
+
+    if let Some(data) = user_data {
+        for item in data.iter() {
+            if !item.is_instance_of::<PyBytes>() {
+                return errors::wrap(Err(format!(
+                    "user_data should contain only bytes, got {}: {}",
+                    item,
+                    item.get_type()
+                )));
+            }
+            let bytes = item.cast::<PyBytes>()?.as_bytes().to_vec();
+            storage.add_user(Storage::Owned(bytes));
+        }
+    }
+
+    Ok(storage)
+}
+
+fn unpack_word_id(raw: u32, max_dict_id: usize) -> PyResult<WordId> {
+    let word_id = WordId::from_raw(raw);
+    let dict_id = word_id.dic() as usize;
+
+    // Packed id with explicit dictionary component.
+    if !word_id.is_oov() && dict_id > 0 && dict_id < max_dict_id {
+        return Ok(word_id);
+    }
+
+    // Legacy id format: lex_id * 10**8 + relative_word_id.
+    if dict_id == 0 && raw >= LEGACY_LEX_STRIDE {
+        let legacy_lex_id = (raw / LEGACY_LEX_STRIDE) as usize;
+        let legacy_word_id = raw % LEGACY_LEX_STRIDE;
+
+        if legacy_lex_id > 0 && legacy_lex_id < max_dict_id {
+            return errors::wrap(WordId::checked(legacy_lex_id as u8, legacy_word_id));
+        }
+    }
+
+    if word_id.is_oov() {
+        return errors::wrap(Err(format!(
+            "word id {} is OOV/special and does not map to dictionary word info",
+            raw
+        )));
+    }
+
+    if dict_id >= max_dict_id {
+        return errors::wrap(Err(format!(
+            "word id {} has dictionary id {} but this dictionary has ids 0..{}",
+            raw,
+            dict_id,
+            max_dict_id.saturating_sub(1)
+        )));
+    }
+
+    Ok(word_id)
 }
 
 pub(crate) fn extract_mode(mode: &Bound<'_, PyAny>) -> PyResult<Mode> {

@@ -387,3 +387,39 @@ fn resolve_user_entry_without_system_in_trie() {
     assert_eq!(winfo.a_unit_split()[0], WordId::new(1, 0));
     assert_eq!(winfo.a_unit_split()[1], WordId::new(0, 1));
 }
+
+#[test]
+fn user_dictionary_keeps_legacy_and_cross_lex_refs() {
+    let mut sys_bldr = DictBuilder::new_system();
+    sys_bldr.read_conn(MATRIX_10_10).unwrap();
+    sys_bldr
+        .read_lexicon(include_bytes!("data_1word.csv"))
+        .unwrap();
+    let mut sys_data = Vec::new();
+    sys_bldr.compile(&mut sys_data).unwrap();
+    let sys = DictionaryLoader::read_system_dictionary(&sys_data).unwrap();
+    let sys = sys.to_loaded().unwrap();
+
+    let mut user_bldr = DictBuilder::new_user(&sys);
+    let packed_cross_lex = (2u32 << 28) + 1;
+    let csv = format!(
+        "テスト,1,1,1000,テスト,名詞,普通名詞,一般,*,*,*,テスト,テスト,200000002,C,100000001,{packed_cross_lex},200000003,*"
+    );
+    user_bldr.read_lexicon(csv.as_bytes()).unwrap();
+    user_bldr.resolve().unwrap();
+    let mut user_data = Vec::new();
+    user_bldr.compile(&mut user_data).unwrap();
+    let user = DictionaryLoader::read_user_dictionary(&user_data).unwrap();
+    let merged = sys.merge_dictionary(user).unwrap();
+
+    let mut iter = merged.lexicon().lookup("テスト".as_bytes(), 0);
+    let entry = iter.next().unwrap();
+    assert_eq!(entry.word_id, WordId::new(1, 0));
+    assert_eq!(iter.next(), None);
+
+    let winfo = merged.lexicon_set.get_word_info(entry.word_id).unwrap();
+    assert_eq!(winfo.dictionary_form_word_id(), 200000002);
+    assert_eq!(winfo.a_unit_split(), [WordId::from_raw(100000001)]);
+    assert_eq!(winfo.b_unit_split(), [WordId::from_raw(packed_cross_lex)]);
+    assert_eq!(winfo.word_structure(), [WordId::from_raw(200000003)]);
+}

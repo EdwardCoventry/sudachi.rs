@@ -39,6 +39,8 @@ use crate::dic::word_id::WordId;
 use crate::dic::POS_DEPTH;
 use crate::error::SudachiResult;
 
+const LEGACY_LEX_STRIDE: u32 = 100_000_000;
+
 #[cfg(test)]
 mod test;
 
@@ -463,19 +465,35 @@ impl LexiconReader {
         dic1_max: usize,
         label: &'static str,
     ) -> DicWriteResult<()> {
-        let max = match wid.dic() {
-            0 => dic0_max,
-            1 => dic1_max,
-            x => panic!("invalid dictionary ID={}, should not happen", x),
-        };
-        if wid.word() >= max as u32 {
-            return Err(BuildFailure::InvalidFieldSize {
-                actual: wid.word() as _,
-                expected: max,
-                field: label,
-            });
+        match wid.dic() {
+            0 => {
+                if wid.word() < dic0_max as u32 {
+                    return Ok(());
+                }
+                // For user dictionary compilation, keep legacy packed ids
+                // (lex_id * 10**8 + relative_word_id) as external references.
+                if dic1_max > 0 && wid.word() >= LEGACY_LEX_STRIDE {
+                    return Ok(());
+                }
+                Err(BuildFailure::InvalidFieldSize {
+                    actual: wid.word() as _,
+                    expected: dic0_max,
+                    field: label,
+                })
+            }
+            1 => {
+                if wid.word() >= dic1_max as u32 {
+                    return Err(BuildFailure::InvalidFieldSize {
+                        actual: wid.word() as _,
+                        expected: dic1_max,
+                        field: label,
+                    });
+                }
+                Ok(())
+            }
+            2..=14 => Ok(()),
+            _ => Err(BuildFailure::InvalidWordId(wid.as_raw().to_string())),
         }
-        Ok(())
     }
 
     fn parse_splits(&mut self, data: &str) -> DicWriteResult<(Vec<SplitUnit>, usize)> {

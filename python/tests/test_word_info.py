@@ -30,11 +30,19 @@ class TestTokenizer(unittest.TestCase):
     def test_wordinfo(self):
         # た
         wi = self.tokenizer_obj.tokenize('た')[0].get_word_info()
+        self.assertEqual(0, wi.word_id)
+        self.assertEqual(0, wi.word_id_packed)
+        self.assertEqual(0, wi.word_id_relative)
+        self.assertEqual(0, wi.lex_id)
+        self.assertEqual(0, wi.dictionary_id)
         self.assertEqual('た', wi.surface)
         self.assertEqual(3, wi.head_word_length)
         self.assertEqual(0, wi.pos_id)
         self.assertEqual('た', wi.normalized_form)
         self.assertEqual(-1, wi.dictionary_form_word_id)
+        self.assertEqual(-1, wi.dictionary_form_word_id_packed)
+        self.assertEqual(-1, wi.dictionary_form_word_id_relative)
+        self.assertEqual(-1, wi.dictionary_form_lex_id)
         self.assertEqual('た', wi.dictionary_form)
         self.assertEqual('タ', wi.reading_form)
         self.assertEqual([], wi.a_unit_split)
@@ -43,18 +51,43 @@ class TestTokenizer(unittest.TestCase):
 
         # 行っ
         wi = self.tokenizer_obj.tokenize('行っ')[0].get_word_info()
+        self.assertEqual(8, wi.word_id)
+        self.assertEqual(8, wi.word_id_packed)
+        self.assertEqual(8, wi.word_id_relative)
+        self.assertEqual(0, wi.lex_id)
+        self.assertEqual(0, wi.dictionary_id)
         self.assertEqual('行っ', wi.surface)
         self.assertEqual('行く', wi.normalized_form)
         self.assertEqual(7, wi.dictionary_form_word_id)
+        self.assertEqual(7, wi.dictionary_form_word_id_packed)
+        self.assertEqual(7, wi.dictionary_form_word_id_relative)
+        self.assertEqual(0, wi.dictionary_form_lex_id)
         self.assertEqual('行く', wi.dictionary_form)
 
         # 東京都
         wi = self.tokenizer_obj.tokenize('東京都')[0].get_word_info()
+        self.assertEqual(6, wi.word_id)
+        self.assertEqual(6, wi.word_id_packed)
+        self.assertEqual(6, wi.word_id_relative)
+        self.assertEqual(0, wi.lex_id)
+        self.assertEqual(0, wi.dictionary_id)
         self.assertEqual('東京都', wi.surface)
         self.assertEqual([5, 9], wi.a_unit_split)
         self.assertEqual([], wi.b_unit_split)
         self.assertEqual([5, 9], wi.word_structure)
         self.assertEqual([], wi.synonym_group_ids)
+
+        # user dictionary token
+        wi = self.tokenizer_obj.tokenize('ぴらる')[0].get_word_info()
+        self.assertEqual(100000000, wi.word_id)
+        self.assertEqual(2**28 + 0, wi.word_id_packed)
+        self.assertEqual(0, wi.word_id_relative)
+        self.assertEqual(1, wi.lex_id)
+        self.assertEqual(1, wi.dictionary_id)
+        self.assertEqual(-1, wi.dictionary_form_word_id)
+        self.assertEqual(-1, wi.dictionary_form_word_id_packed)
+        self.assertEqual(-1, wi.dictionary_form_word_id_relative)
+        self.assertEqual(-1, wi.dictionary_form_lex_id)
 
     def test_wordinfo_with_longword(self):
         s = "0123456789" * 30

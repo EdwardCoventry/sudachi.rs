@@ -19,6 +19,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 
 use sudachi::analysis::stateful_tokenizer::StatefulTokenizer;
 use sudachi::dic::subset::InfoSubset;
@@ -28,6 +29,8 @@ use crate::dictionary::{extract_mode, PyDicData};
 use crate::errors;
 use crate::morpheme::PyMorphemeListWrapper;
 use crate::projection::PyProjector;
+
+const LEGACY_LEX_STRIDE: i32 = 100_000_000;
 
 /// Unit to split text.
 ///
@@ -200,5 +203,78 @@ impl PyTokenizer {
     #[getter]
     fn mode(&self) -> PySplitMode {
         self.tokenizer.mode().into()
+    }
+
+    /// Enumerate tokenization candidates constrained by exact reading.
+    ///
+    /// Returns a list sorted by total path cost in ascending order.
+    /// Each element is a dict with:
+    /// - total_cost: int
+    /// - tokens: list[dict] containing surface/reading and word-id fields.
+    #[pyo3(
+        signature = (text, reading, max_results=64, min_tokens=1),
+        text_signature = "(self, /, text: str, reading: str, max_results=64, min_tokens=1) -> list[dict]",
+    )]
+    fn tokenize_reading_candidates<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        text: &'py str,
+        reading: &'py str,
+        max_results: usize,
+        min_tokens: usize,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let min_tokens = min_tokens.max(1);
+        let candidates = errors::wrap_ctx(
+            py.detach(|| {
+                self.tokenizer.reset().push_str(text);
+                self.tokenizer.do_tokenize()?;
+                self.tokenizer
+                    .reading_candidates_with_min_tokens(reading, max_results, min_tokens)
+            }),
+            "Error during reading candidate tokenization",
+        )?;
+
+        let out = PyList::empty(py);
+        for cand in candidates {
+            let cand_obj = PyDict::new(py);
+            cand_obj.set_item("total_cost", cand.total_cost)?;
+
+            let tokens = PyList::empty(py);
+            for token in cand.tokens {
+                let tok = PyDict::new(py);
+                let packed_word_id = token.word_id.as_raw();
+                let dictionary_id = if token.word_id.is_oov() {
+                    -1
+                } else {
+                    token.word_id.dic() as i32
+                };
+                let relative_word_id = if token.word_id.is_oov() {
+                    -1
+                } else {
+                    token.word_id.word() as i32
+                };
+                let legacy_word_id = if dictionary_id <= 0 {
+                    relative_word_id
+                } else {
+                    dictionary_id * LEGACY_LEX_STRIDE + relative_word_id
+                };
+
+                tok.set_item("surface", token.surface)?;
+                tok.set_item("reading_form", token.reading_form)?;
+                tok.set_item("begin", token.begin)?;
+                tok.set_item("end", token.end)?;
+                tok.set_item("word_id", legacy_word_id)?;
+                tok.set_item("word_id_relative", relative_word_id)?;
+                tok.set_item("word_id_packed", packed_word_id)?;
+                tok.set_item("dictionary_id", dictionary_id)?;
+                tok.set_item("lex_id", dictionary_id)?;
+                tokens.append(tok)?;
+            }
+
+            cand_obj.set_item("tokens", tokens)?;
+            out.append(cand_obj)?;
+        }
+
+        Ok(out)
     }
 }

@@ -25,6 +25,8 @@ use crate::dic::build::error::{BuildFailure, DicWriteResult};
 use crate::dic::build::{MAX_ARRAY_LEN, MAX_DIC_STRING_LEN};
 use crate::dic::word_id::WordId;
 
+const NATIVE_LEX_SHIFT: u32 = 28;
+
 #[inline(always)]
 pub fn it_next<'a, I, T, F>(
     orig: &'a str,
@@ -86,7 +88,7 @@ pub(crate) fn parse_u32(data: &str) -> DicWriteResult<u32> {
 
 #[inline]
 pub(crate) fn parse_dic_form(data: &str) -> DicWriteResult<WordId> {
-    if data == "*" {
+    if data == "*" || data == "-1" {
         Ok(WordId::INVALID)
     } else {
         parse_wordid(data)
@@ -99,7 +101,19 @@ pub(crate) fn parse_wordid(data: &str) -> DicWriteResult<WordId> {
         let wid = parse_wordid_raw(stripped);
         wid.map(|w| WordId::new(1, w.word()))
     } else {
-        parse_wordid_raw(data)
+        match u32::from_str(data) {
+            Ok(raw) => {
+                let packed = WordId::from_raw(raw);
+                if packed.dic() > 0 && !packed.is_oov() && raw >= (1 << NATIVE_LEX_SHIFT) {
+                    return Ok(packed);
+                }
+                match WordId::checked(0, raw) {
+                    Ok(id) => Ok(id),
+                    Err(_) => Err(BuildFailure::InvalidWordId(data.to_owned())),
+                }
+            }
+            Err(_) => Err(BuildFailure::InvalidWordId(data.to_owned())),
+        }
     }
 }
 
@@ -261,5 +275,17 @@ mod test {
         // max character
         claim::assert_matches!(unescape("\\u{110000}"), Err(_));
         claim::assert_matches!(unescape("\\u{FFFFFF}"), Err(_));
+    }
+
+    #[test]
+    fn parse_dic_form_minus_one() {
+        assert_eq!(parse_dic_form("-1").unwrap(), WordId::INVALID);
+    }
+
+    #[test]
+    fn parse_wordid_native_packed() {
+        let raw = (2 << NATIVE_LEX_SHIFT) + 123;
+        let wid = parse_wordid(&raw.to_string()).unwrap();
+        assert_eq!(wid, WordId::new(2, 123));
     }
 }

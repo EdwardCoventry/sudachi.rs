@@ -21,6 +21,7 @@ use crate::dic::read::u32_parser;
 use crate::dic::read::word_info::WordInfoParser;
 use crate::dic::subset::InfoSubset;
 use crate::dic::word_id::WordId;
+use crate::error::SudachiError;
 use crate::prelude::*;
 
 pub struct WordInfos<'a> {
@@ -46,7 +47,18 @@ impl<'a> WordInfos<'a> {
     }
 
     fn word_id_to_offset(&self, word_id: u32) -> SudachiResult<usize> {
-        Ok(u32_parser(&self.bytes[self.offset + (4 * word_id as usize)..])?.1 as usize)
+        if word_id >= self._word_size {
+            let begin = self.offset + (4 * word_id as usize);
+            return Err(SudachiError::InvalidRange(begin, begin + 4));
+        }
+
+        let begin = self.offset + (4 * word_id as usize);
+        let end = begin + 4;
+        if end > self.bytes.len() {
+            return Err(SudachiError::InvalidRange(begin, end));
+        }
+
+        Ok(u32_parser(&self.bytes[begin..])?.1 as usize)
     }
 
     fn parse_word_info(&self, word_id: u32, subset: InfoSubset) -> SudachiResult<WordInfoData> {
@@ -64,7 +76,7 @@ impl<'a> WordInfos<'a> {
 
         // consult dictionary form
         let dfwi = word_info.dictionary_form_word_id;
-        if (dfwi >= 0) && (dfwi != word_id as i32) {
+        if (dfwi >= 0) && (dfwi != word_id as i32) && ((dfwi as u32) < self._word_size) {
             let inner = self.parse_word_info(dfwi as u32, InfoSubset::SURFACE)?;
             word_info.dictionary_form = inner.surface;
         };
