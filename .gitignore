@@ -2,6 +2,9 @@
 **/*.rs.bk
 README*.html
 
+# macOS Finder metadata
+.DS_Store
+
 *.dic
 /tests/resources/*.tmp
 
@@ -18,3 +21,7 @@ __pycache__/
 *.so
 python/py_src/sudachipy/*.pyd
 python/build/
+
+# local diagnostics generated during fork testing
+python/tests/output/*
+!python/tests/output/.gitkeep
