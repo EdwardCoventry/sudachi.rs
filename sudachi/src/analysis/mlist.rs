@@ -15,7 +15,7 @@
  */
 
 use crate::analysis::morpheme::Morpheme;
-use crate::analysis::node::{PathCost, ResultNode};
+use crate::analysis::node::{LatticeNode, PathCost, ResultNode, RightId};
 use crate::analysis::stateful_tokenizer::StatefulTokenizer;
 use crate::analysis::stateless_tokenizer::DictionaryAccess;
 use crate::analysis::{Mode, Node};
@@ -61,6 +61,23 @@ pub struct MorphemeList<T> {
 }
 
 impl<T: DictionaryAccess> MorphemeList<T> {
+    fn is_bridge_separator_surface(surface: &str) -> bool {
+        if surface.is_empty() {
+            return true;
+        }
+        if surface.chars().all(char::is_whitespace) {
+            return true;
+        }
+
+        for ch in surface.chars() {
+            match ch {
+                '…' | '⋯' | '.' | '．' | '・' => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
     /// Returns an empty morpheme list
     pub fn empty(dict: T) -> Self {
         let input = Default::default();
@@ -161,6 +178,41 @@ impl<T: DictionaryAccess> MorphemeList<T> {
         let first_node = self.node(0);
         let last_node = self.node(len - 1);
         last_node.total_cost() - first_node.total_cost()
+    }
+
+    /// Gets the path cost while bridging across separator tokens.
+    ///
+    /// Tokenization output is unchanged. This is a score-only variant:
+    /// separator tokens are ignored for scoring and neighboring
+    /// content tokens are connected directly.
+    pub fn get_internal_cost_whitespace_bridged(&self) -> i32 {
+        if self.is_empty() {
+            return 0;
+        }
+
+        let conn = self.dict.grammar().conn_matrix();
+        let mut prev_non_ws: Option<&ResultNode> = None;
+        let mut total_cost = 0i32;
+
+        for node in &self.nodes.data {
+            if Self::is_bridge_separator_surface(node.word_info().surface()) {
+                continue;
+            }
+
+            // Split A/B nodes use sentinel params and can't be rescored this way.
+            if node.left_id() == u16::MAX || node.right_id() == u16::MAX || node.cost() == i16::MAX
+            {
+                return self.get_internal_cost();
+            }
+
+            if let Some(prev) = prev_non_ws {
+                total_cost +=
+                    conn.cost(prev.right_id(), node.left_id()) as i32 + node.cost() as i32;
+            }
+            prev_non_ws = Some(node);
+        }
+
+        total_cost
     }
 
     pub(crate) fn node(&self, idx: usize) -> &ResultNode {

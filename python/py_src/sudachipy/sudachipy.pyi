@@ -357,6 +357,15 @@ class MorphemeList:
         """
         ...
 
+    def get_internal_cost_whitespace_bridged(self) -> int:
+        """
+        Returns path cost with whitespace-bridged scoring.
+
+        Tokenization output is unchanged. Whitespace tokens are ignored for
+        scoring and neighboring non-whitespace tokens are connected directly.
+        """
+        ...
+
     def size(self) -> int:
         """
         Returns the number of morpheme in this list.
@@ -420,6 +429,14 @@ class Tokenizer:
         """
         Get the current analysis mode
         :return: current analysis mode
+        """
+        ...
+
+    def set_global_whitespace_bridge(self, enabled: bool) -> bool:
+        """
+        Enable/disable global whitespace-bridge transitions in Viterbi.
+
+        Returns the previous value.
         """
         ...
 

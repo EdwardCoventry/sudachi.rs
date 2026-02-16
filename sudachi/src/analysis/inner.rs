@@ -52,6 +52,7 @@ pub struct Node {
     right_id: u16,
     cost: i16,
     word_id: WordId,
+    is_whitespace: bool,
 }
 
 impl Node {
@@ -70,12 +71,21 @@ impl Node {
             right_id,
             cost,
             word_id,
+            is_whitespace: false,
         }
     }
 
     pub fn set_range(&mut self, begin: u16, end: u16) {
         self.begin = begin;
         self.end = end;
+    }
+
+    pub fn is_whitespace(&self) -> bool {
+        self.is_whitespace
+    }
+
+    pub fn set_whitespace(&mut self, is_whitespace: bool) {
+        self.is_whitespace = is_whitespace;
     }
 }
 

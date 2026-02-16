@@ -191,3 +191,22 @@ fn morpheme_extraction() {
     assert_eq!(0, e.begin_c());
     assert_eq!(3, e.end_c());
 }
+
+#[test]
+fn global_whitespace_bridge_keeps_surface_sequence_and_non_increasing_cost() {
+    let text = "すもも も もも も ももの うち";
+    let mut tok = TestTokenizer::new_built(Mode::C);
+
+    tok.tok.set_global_whitespace_bridge(false);
+    let normal = tok.tokenize(text);
+    let normal_cost = normal.get_internal_cost();
+    let normal_surfaces: Vec<String> = normal.iter().map(|m| m.surface().to_string()).collect();
+
+    tok.tok.set_global_whitespace_bridge(true);
+    let bridged = tok.tokenize(text);
+    let bridged_cost = bridged.get_internal_cost();
+    let bridged_surfaces: Vec<String> = bridged.iter().map(|m| m.surface().to_string()).collect();
+
+    assert_eq!(normal_surfaces, bridged_surfaces);
+    assert!(bridged_cost <= normal_cost);
+}

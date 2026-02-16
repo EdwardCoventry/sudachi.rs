@@ -17,6 +17,8 @@ python/dist/
 __pycache__/
 .env
 .venv
+.venv-codex
+python/.venv-codex/
 *.egg-info
 *.so
 python/py_src/sudachipy/*.pyd

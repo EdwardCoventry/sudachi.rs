@@ -166,6 +166,20 @@ class TestTokenizer(unittest.TestCase):
         self.assertEqual(id(ms1), id(ms2))
         self.assertEqual(m.surface(), 'すだち')
 
+    def test_global_whitespace_bridge_toggle(self):
+        prev = self.tokenizer_obj.set_global_whitespace_bridge(True)
+        self.assertFalse(prev)
+        prev = self.tokenizer_obj.set_global_whitespace_bridge(False)
+        self.assertTrue(prev)
+
+    def test_global_whitespace_bridge_non_increasing_cost(self):
+        text = '私は 東京 大学 へ 行く'
+        self.tokenizer_obj.set_global_whitespace_bridge(False)
+        normal = self.tokenizer_obj.tokenize(text).get_internal_cost()
+        self.tokenizer_obj.set_global_whitespace_bridge(True)
+        bridged = self.tokenizer_obj.tokenize(text).get_internal_cost()
+        self.assertLessEqual(bridged, normal)
+
 
 if __name__ == '__main__':
     unittest.main()

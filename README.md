@@ -81,6 +81,27 @@ Fork-specific tests include coverage for:
 - variant matching (case/width/kana/symbol-like cases)
 - user dictionary build and ID-field compatibility cases
 
+## 6) Whitespace bridge and ellipsis separators
+
+Bridge scoring and global whitespace-bridge tokenization treat all of the following as bridge separators:
+
+- Unicode whitespace
+- `…` and `⋯`
+- dot variants and Japanese middle dot: `.`, `．`, `・`
+- repeated forms such as `...`, `．．．`, `・・・`, including tokenizer-split fragments
+
+This keeps costs connected across spacing/ellipsis separators without changing token output.
+
+## Install this fork
+
+Install from GitHub (works on another machine):
+
+- `pip install "git+https://github.com/EdwardCoventry/sudachi.rs.git@main#subdirectory=python"`
+
+Install locally in editable mode (for local development):
+
+- `pip install -e /path/to/sudachi.rs/python`
+
 ## Status
 
 This fork is intentionally opinionated for cross-lex ID compatibility and migration needs.

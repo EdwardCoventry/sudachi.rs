@@ -30,6 +30,19 @@ class TestReadingCandidates(unittest.TestCase):
         self.dict_.close()
         self.default_dict_.close()
 
+    def _assert_candidate_covers_text(self, text: str, cand: dict):
+        tokens = cand["tokens"]
+        self.assertGreaterEqual(len(tokens), 1)
+        reconstructed = "".join(t["surface"] for t in tokens)
+        self.assertEqual(text, reconstructed)
+
+        prev_end = 0
+        for token in tokens:
+            self.assertEqual(prev_end, token["begin"])
+            self.assertGreater(token["end"], token["begin"])
+            prev_end = token["end"]
+        self.assertEqual(len(text), prev_end)
+
     def test_sorted_candidates_and_alternative_segmentation(self):
         cands = self.tokenizer_obj.tokenize_reading_candidates(
             "東京都", "トウキョウト", max_results=16
@@ -43,6 +56,15 @@ class TestReadingCandidates(unittest.TestCase):
         costs = [c["total_cost"] for c in cands]
         self.assertEqual(costs, sorted(costs))
 
+    def test_candidate_token_spans_cover_input(self):
+        text = "東京都。"
+        cands = self.tokenizer_obj.tokenize_reading_candidates(
+            text, "トウキョウト。", max_results=16
+        )
+        self.assertGreaterEqual(len(cands), 1)
+        for c in cands:
+            self._assert_candidate_covers_text(text, c)
+
     def test_no_match_and_limit(self):
         cands = self.tokenizer_obj.tokenize_reading_candidates(
             "東京都", "トウキョウフ", max_results=16
@@ -53,6 +75,7 @@ class TestReadingCandidates(unittest.TestCase):
             "東京都", "トウキョウト", max_results=1
         )
         self.assertEqual(1, len(limited))
+        self.assertEqual(["東京都"], [t["surface"] for t in limited[0]["tokens"]])
 
     def test_case_width_and_symbol_variants(self):
         for reading in ("A/B", "a/b", "aキゴウb", "ａ／ｂ"):
@@ -91,6 +114,21 @@ class TestReadingCandidates(unittest.TestCase):
         self.assertGreaterEqual(len(no_single), 1)
         self.assertTrue(all(len(c["tokens"]) >= 2 for c in no_single))
         self.assertTrue(all([t["surface"] for t in c["tokens"]] != ["東京都"] for c in no_single))
+
+    def test_min_tokens_too_large_returns_empty(self):
+        no_path = self.default_tokenizer_obj.tokenize_reading_candidates(
+            "東京都", "トウキョウト", max_results=16, min_tokens=10
+        )
+        self.assertEqual([], no_path)
+
+    def test_min_tokens_zero_is_treated_as_one(self):
+        as_one = self.default_tokenizer_obj.tokenize_reading_candidates(
+            "東京都", "トウキョウト", max_results=16, min_tokens=1
+        )
+        as_zero = self.default_tokenizer_obj.tokenize_reading_candidates(
+            "東京都", "トウキョウト", max_results=16, min_tokens=0
+        )
+        self.assertEqual(as_one, as_zero)
 
 
 if __name__ == "__main__":

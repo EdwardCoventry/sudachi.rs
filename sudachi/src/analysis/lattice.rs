@@ -35,6 +35,7 @@ use std::io::Write;
 struct VNode {
     total_cost: i32,
     right_id: u16,
+    prev_non_ws_right_id: u16,
 }
 
 impl RightId for VNode {
@@ -52,11 +53,14 @@ impl PathCost for VNode {
 }
 
 impl VNode {
+    const NONE_RIGHT_ID: u16 = u16::MAX;
+
     #[inline]
-    fn new(right_id: u16, total_cost: i32) -> VNode {
+    fn new(right_id: u16, total_cost: i32, prev_non_ws_right_id: u16) -> VNode {
         VNode {
             right_id,
             total_cost,
+            prev_non_ws_right_id,
         }
     }
 }
@@ -77,9 +81,14 @@ pub struct Lattice {
     indices: Vec<Vec<NodeIdx>>,
     eos: Option<(NodeIdx, i32)>,
     size: usize,
+    global_whitespace_bridge: bool,
 }
 
 impl Lattice {
+    pub fn set_global_whitespace_bridge(&mut self, enabled: bool) -> bool {
+        std::mem::replace(&mut self.global_whitespace_bridge, enabled)
+    }
+
     /// Number of boundaries in the current lattice.
     /// For non-empty input this equals `char_len + 1`.
     pub fn boundary_count(&self) -> usize {
@@ -119,7 +128,7 @@ impl Lattice {
     }
 
     fn connect_bos(&mut self) {
-        self.ends[0].push(VNode::new(0, 0));
+        self.ends[0].push(VNode::new(0, 0, VNode::NONE_RIGHT_ID));
     }
 
     /// Find EOS node -- finish the lattice construction
@@ -128,7 +137,7 @@ impl Lattice {
         let eos_start = (len - 1) as u16;
         let eos_end = (len - 1) as u16;
         let node = Node::new(eos_start, eos_end, 0, 0, 0, WordId::EOS);
-        let (idx, cost) = self.connect_node(&node, conn);
+        let (idx, cost, _) = self.connect_node(&node, conn);
         if cost == i32::MAX {
             Err(SudachiError::EosBosDisconnect)
         } else {
@@ -140,9 +149,9 @@ impl Lattice {
     /// Insert a single node in the lattice, founding the path to the previous node
     /// Assumption: lattice for all previous boundaries is already constructed
     pub fn insert(&mut self, node: Node, conn: &ConnectionMatrix) -> i32 {
-        let (idx, cost) = self.connect_node(&node, conn);
+        let (idx, cost, prev_non_ws_right_id) = self.connect_node(&node, conn);
         let end_idx = node.end();
-        self.ends[end_idx].push(VNode::new(node.right_id(), cost));
+        self.ends[end_idx].push(VNode::new(node.right_id(), cost, prev_non_ws_right_id));
         self.indices[end_idx].push(idx);
         self.ends_full[end_idx].push(node);
         cost
@@ -151,27 +160,53 @@ impl Lattice {
     /// Find the path with the minimal cost through the lattice to the attached node
     /// Assumption: lattice for all previous boundaries is already constructed
     #[inline]
-    pub fn connect_node(&self, r_node: &Node, conn: &ConnectionMatrix) -> (NodeIdx, i32) {
+    pub fn connect_node(&self, r_node: &Node, conn: &ConnectionMatrix) -> (NodeIdx, i32, u16) {
         let begin = r_node.begin();
 
         let node_cost = r_node.cost() as i32;
         let mut min_cost = i32::MAX;
         let mut prev_idx = NodeIdx::empty();
+        let mut prev_non_ws_right_id = VNode::NONE_RIGHT_ID;
 
-        for (i, l_node) in self.ends[begin].iter().enumerate() {
-            if !l_node.is_connected_to_bos() {
+        for (i, l_vnode) in self.ends[begin].iter().enumerate() {
+            if !l_vnode.is_connected_to_bos() {
                 continue;
             }
 
-            let connect_cost = conn.cost(l_node.right_id(), r_node.left_id()) as i32;
-            let new_cost = l_node.total_cost() + connect_cost + node_cost;
-            if new_cost < min_cost {
-                min_cost = new_cost;
+            let l_node_is_whitespace = if begin == 0 {
+                false
+            } else {
+                self.ends_full[begin][i].is_whitespace()
+            };
+            let normal_connect_cost = conn.cost(l_vnode.right_id(), r_node.left_id()) as i32;
+            let normal_cost = l_vnode.total_cost() + normal_connect_cost + node_cost;
+
+            let mut best_cost_for_pred = normal_cost;
+            if self.global_whitespace_bridge
+                && l_node_is_whitespace
+                && !r_node.is_whitespace()
+                && l_vnode.prev_non_ws_right_id != VNode::NONE_RIGHT_ID
+            {
+                let bridged_connect_cost =
+                    conn.cost(l_vnode.prev_non_ws_right_id, r_node.left_id()) as i32;
+                let bridged_cost = l_vnode.total_cost() + bridged_connect_cost + node_cost;
+                if bridged_cost < best_cost_for_pred {
+                    best_cost_for_pred = bridged_cost;
+                }
+            }
+
+            if best_cost_for_pred < min_cost {
+                min_cost = best_cost_for_pred;
                 prev_idx = NodeIdx::new(begin as u16, i as u16);
+                prev_non_ws_right_id = if r_node.is_whitespace() {
+                    l_vnode.prev_non_ws_right_id
+                } else {
+                    r_node.right_id()
+                };
             }
         }
 
-        (prev_idx, min_cost)
+        (prev_idx, min_cost, prev_non_ws_right_id)
     }
 
     /// Checks if there exist at least one at the word end boundary
@@ -207,6 +242,122 @@ impl Lattice {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dic::word_id::WordId;
+
+    fn make_node(
+        begin: u16,
+        end: u16,
+        left_id: u16,
+        right_id: u16,
+        cost: i16,
+        word_id: u32,
+        is_whitespace: bool,
+    ) -> Node {
+        let mut node = Node::new(
+            begin,
+            end,
+            left_id,
+            right_id,
+            cost,
+            WordId::from_raw(word_id),
+        );
+        node.set_whitespace(is_whitespace);
+        node
+    }
+
+    fn path_word_ids(lattice: &Lattice) -> Vec<u32> {
+        let mut ids = Vec::new();
+        let mut idx = Vec::new();
+        lattice.fill_top_path(&mut idx);
+        idx.reverse();
+        for i in idx {
+            ids.push(lattice.node(i).0.word_id().as_raw());
+        }
+        ids
+    }
+
+    #[test]
+    fn whitespace_bridge_can_change_best_path() {
+        let n = 16usize;
+        let raw = vec![0u8; n * n * 2];
+        let mut conn = ConnectionMatrix::from_offset_size(&raw, 0, n, n).unwrap();
+
+        // left chunk preference
+        conn.update(1, 1, 0); // L1 -> W1
+        conn.update(2, 1, 100);
+        conn.update(1, 2, 100);
+        conn.update(2, 2, 0); // L2 -> W2
+
+        // normal whitespace transition is expensive
+        conn.update(9, 3, 50);
+        // bridged costs prefer L2 context
+        conn.update(1, 3, 100);
+        conn.update(2, 3, 0);
+
+        let mut plain = Lattice::default();
+        plain.reset(3);
+        plain.insert(make_node(0, 1, 0, 1, 0, 1, false), &conn);
+        plain.insert(make_node(0, 1, 0, 2, 1, 2, false), &conn);
+        plain.insert(make_node(1, 2, 1, 9, 0, 11, true), &conn);
+        plain.insert(make_node(1, 2, 2, 9, 0, 12, true), &conn);
+        plain.insert(make_node(2, 3, 3, 4, 0, 21, false), &conn);
+        plain.connect_eos(&conn).unwrap();
+        assert_eq!(vec![1, 11, 21], path_word_ids(&plain));
+
+        let mut bridged = Lattice::default();
+        bridged.set_global_whitespace_bridge(true);
+        bridged.reset(3);
+        bridged.insert(make_node(0, 1, 0, 1, 0, 1, false), &conn);
+        bridged.insert(make_node(0, 1, 0, 2, 1, 2, false), &conn);
+        bridged.insert(make_node(1, 2, 1, 9, 0, 11, true), &conn);
+        bridged.insert(make_node(1, 2, 2, 9, 0, 12, true), &conn);
+        bridged.insert(make_node(2, 3, 3, 4, 0, 21, false), &conn);
+        bridged.connect_eos(&conn).unwrap();
+        assert_eq!(vec![2, 12, 21], path_word_ids(&bridged));
+    }
+
+    #[test]
+    fn whitespace_bridge_keeps_normal_transition_when_cheaper() {
+        let n = 16usize;
+        let raw = vec![0u8; n * n * 2];
+        let mut conn = ConnectionMatrix::from_offset_size(&raw, 0, n, n).unwrap();
+
+        conn.update(1, 1, 0);
+        conn.update(2, 1, 100);
+        conn.update(1, 2, 100);
+        conn.update(2, 2, 0);
+
+        // normal transition is already best.
+        conn.update(9, 3, 0);
+        conn.update(1, 3, 100);
+        conn.update(2, 3, 100);
+
+        let mut plain = Lattice::default();
+        plain.reset(3);
+        plain.insert(make_node(0, 1, 0, 1, 0, 1, false), &conn);
+        plain.insert(make_node(0, 1, 0, 2, 1, 2, false), &conn);
+        plain.insert(make_node(1, 2, 1, 9, 0, 11, true), &conn);
+        plain.insert(make_node(1, 2, 2, 9, 0, 12, true), &conn);
+        plain.insert(make_node(2, 3, 3, 4, 0, 21, false), &conn);
+        plain.connect_eos(&conn).unwrap();
+
+        let mut bridged = Lattice::default();
+        bridged.set_global_whitespace_bridge(true);
+        bridged.reset(3);
+        bridged.insert(make_node(0, 1, 0, 1, 0, 1, false), &conn);
+        bridged.insert(make_node(0, 1, 0, 2, 1, 2, false), &conn);
+        bridged.insert(make_node(1, 2, 1, 9, 0, 11, true), &conn);
+        bridged.insert(make_node(1, 2, 2, 9, 0, 12, true), &conn);
+        bridged.insert(make_node(2, 3, 3, 4, 0, 21, false), &conn);
+        bridged.connect_eos(&conn).unwrap();
+
+        assert_eq!(path_word_ids(&plain), path_word_ids(&bridged));
     }
 }
 

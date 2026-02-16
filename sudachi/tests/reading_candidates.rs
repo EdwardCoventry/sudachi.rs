@@ -18,9 +18,26 @@ mod common;
 
 use common::TestStatefulTokenizer as TestTokenizer;
 use sudachi::analysis::Mode;
+use sudachi::analysis::reading_candidates::ReadingCandidatePath;
 
 fn surfaces(path: &[sudachi::analysis::reading_candidates::ReadingCandidateToken]) -> Vec<String> {
     path.iter().map(|t| t.surface.clone()).collect()
+}
+
+fn assert_candidate_paths_cover_text(text: &str, candidates: &[ReadingCandidatePath]) {
+    for cand in candidates {
+        assert!(!cand.tokens.is_empty());
+        let mut prev_end = 0usize;
+        let mut reconstructed = String::new();
+        for token in &cand.tokens {
+            assert_eq!(prev_end, token.begin);
+            assert!(token.end > token.begin);
+            reconstructed.push_str(&token.surface);
+            prev_end = token.end;
+        }
+        assert_eq!(text.chars().count(), prev_end);
+        assert_eq!(text, reconstructed);
+    }
 }
 
 #[test]
@@ -45,6 +62,21 @@ fn reading_candidates_sorted_and_include_alternative_path() {
     for i in 1..candidates.len() {
         assert!(candidates[i - 1].total_cost <= candidates[i].total_cost);
     }
+}
+
+#[test]
+fn reading_candidates_have_valid_spans_and_cover_input() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    let text = "東京都。";
+    tok.tok.reset().push_str(text);
+    tok.tok.do_tokenize().expect("tokenize");
+
+    let candidates = tok
+        .tok
+        .reading_candidates("トウキョウト。", 16)
+        .expect("candidates");
+    assert!(!candidates.is_empty());
+    assert_candidate_paths_cover_text(text, &candidates);
 }
 
 #[test]
@@ -84,10 +116,7 @@ fn reading_candidates_handles_case_width_and_symbols() {
         .expect("lower surface");
     assert!(!lower_surface.is_empty());
 
-    let fullwidth = tok
-        .tok
-        .reading_candidates("ａ／ｂ", 16)
-        .expect("fullwidth");
+    let fullwidth = tok.tok.reading_candidates("ａ／ｂ", 16).expect("fullwidth");
     assert!(!fullwidth.is_empty());
 }
 
@@ -140,4 +169,17 @@ fn reading_candidates_min_tokens_filters_single_token_paths() {
     assert!(no_single
         .iter()
         .all(|c| surfaces(&c.tokens) != vec!["東京都".to_owned()]));
+}
+
+#[test]
+fn reading_candidates_min_tokens_too_large_returns_empty() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    tok.tok.reset().push_str("東京都");
+    tok.tok.do_tokenize().expect("tokenize");
+
+    let no_path = tok
+        .tok
+        .reading_candidates_with_min_tokens("トウキョウト", 16, 10)
+        .expect("no path");
+    assert!(no_path.is_empty());
 }

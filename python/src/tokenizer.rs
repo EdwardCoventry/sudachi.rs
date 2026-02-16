@@ -205,6 +205,18 @@ impl PyTokenizer {
         self.tokenizer.mode().into()
     }
 
+    /// Enable/disable global whitespace-bridge transitions in Viterbi.
+    ///
+    /// When enabled, transitions from whitespace to non-whitespace tokens can
+    /// consider both normal and bridged connections and pick the lower cost.
+    #[pyo3(
+        signature = (enabled),
+        text_signature = "(self, /, enabled: bool) -> bool",
+    )]
+    fn set_global_whitespace_bridge(&mut self, enabled: bool) -> bool {
+        self.tokenizer.set_global_whitespace_bridge(enabled)
+    }
+
     /// Enumerate tokenization candidates constrained by exact reading.
     ///
     /// Returns a list sorted by total path cost in ascending order.

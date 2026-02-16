@@ -36,6 +36,7 @@ pub struct StatefulTokenizer<D> {
     dictionary: D,
     input: InputBuffer,
     debug: bool,
+    global_whitespace_bridge: bool,
     mode: Mode,
     oov: Vec<Node>,
     lattice: Lattice,
@@ -63,6 +64,7 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
             dictionary: dic,
             input: InputBuffer::default(),
             debug,
+            global_whitespace_bridge: false,
             mode,
             oov: Vec::with_capacity(10),
             lattice: Lattice::default(),
@@ -75,6 +77,11 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
     /// Set debug flag and returns the current one
     pub fn set_debug(&mut self, debug: bool) -> bool {
         std::mem::replace(&mut self.debug, debug)
+    }
+
+    /// Enable/disable global whitespace bridge transitions during Viterbi.
+    pub fn set_global_whitespace_bridge(&mut self, enabled: bool) -> bool {
+        std::mem::replace(&mut self.global_whitespace_bridge, enabled)
     }
 
     /// Set the analysis mode and returns the current one
@@ -223,6 +230,8 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
     }
 
     fn build_lattice(&mut self) -> SudachiResult<()> {
+        self.lattice
+            .set_global_whitespace_bridge(self.global_whitespace_bridge);
         let mut builder = LatticeBuilder {
             node_buffer: &mut self.oov,
             lattice: &mut self.lattice,
@@ -290,6 +299,30 @@ struct LatticeBuilder<'a> {
 }
 
 impl<'a> LatticeBuilder<'a> {
+    fn is_bridge_separator_surface(surface: &str) -> bool {
+        if surface.is_empty() {
+            return true;
+        }
+        if surface.chars().all(char::is_whitespace) {
+            return true;
+        }
+
+        // Treat common ellipsis spellings like bridge separators.
+        // This keeps costs connected across "...", "…", "・・・", etc.
+        for ch in surface.chars() {
+            match ch {
+                '…' | '⋯' | '.' | '．' | '・' => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    fn is_whitespace_node(&self, node: &Node) -> bool {
+        let surface = self.input.curr_slice_c(node.char_range());
+        Self::is_bridge_separator_surface(surface)
+    }
+
     #[inline]
     fn build_lattice(&mut self) -> SudachiResult<()> {
         self.lattice.reset(self.input.current_chars().len());
@@ -309,7 +342,7 @@ impl<'a> LatticeBuilder<'a> {
                 }
                 let (left_id, right_id, cost) = self.lexicon.get_word_param(e.word_id);
                 let end_c = self.input.ch_idx(e.end);
-                let node = Node::new(
+                let mut node = Node::new(
                     ch_off as u16,
                     end_c as u16,
                     left_id as u16,
@@ -317,6 +350,7 @@ impl<'a> LatticeBuilder<'a> {
                     cost,
                     e.word_id,
                 );
+                node.set_whitespace(self.is_whitespace_node(&node));
                 created = created.add_word((end_c - ch_off) as i64);
                 self.node_buffer.push(node.clone());
                 self.lattice.insert(node, self.matrix);
@@ -360,7 +394,8 @@ impl<'a> LatticeBuilder<'a> {
         let start_size = self.node_buffer.len();
         let num_provided = plugin.provide_oov(self.input, char_offset, other, self.node_buffer)?;
         for idx in start_size..(start_size + num_provided) {
-            let node = self.node_buffer[idx].clone();
+            let mut node = self.node_buffer[idx].clone();
+            node.set_whitespace(self.is_whitespace_node(&node));
             other = other.add_word(node.char_range().len() as i64);
             self.lattice.insert(node, self.matrix);
         }

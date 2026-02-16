@@ -96,7 +96,10 @@ fn hira_to_kata(ch: char) -> char {
 
 fn normalize_for_matching(text: &str) -> String {
     let nfkc = text.nfkc().collect::<String>();
-    let lower = nfkc.chars().flat_map(|c| c.to_lowercase()).collect::<String>();
+    let lower = nfkc
+        .chars()
+        .flat_map(|c| c.to_lowercase())
+        .collect::<String>();
     lower.chars().map(hira_to_kata).collect::<String>()
 }
 
@@ -189,8 +192,7 @@ impl<'a> Searcher<'a> {
             reading_offset: 0,
         };
         self.dfs(start, 0);
-        self.results
-            .sort_by(|a, b| a.total_cost.cmp(&b.total_cost));
+        self.results.sort_by(|a, b| a.total_cost.cmp(&b.total_cost));
         if self.results.len() > self.max_results {
             self.results.truncate(self.max_results);
         }
@@ -246,9 +248,8 @@ impl<'a> Searcher<'a> {
 
             for node_ref in node_refs {
                 let meta = &self.metas_by_end[node_ref.end][node_ref.index];
-                let step_cost =
-                    self.conn.cost(state.prev_right_id, meta.node.left_id()) as i32
-                        + meta.node.cost() as i32;
+                let step_cost = self.conn.cost(state.prev_right_id, meta.node.left_id()) as i32
+                    + meta.node.cost() as i32;
                 for token_reading in &meta.match_variants {
                     let token_reading = token_reading.as_bytes();
                     if token_reading.is_empty() {
@@ -310,8 +311,8 @@ impl<'a> Searcher<'a> {
 
         for node_ref in node_refs {
             let meta = &self.metas_by_end[node_ref.end][node_ref.index];
-            let step_cost =
-                self.conn.cost(state.prev_right_id, meta.node.left_id()) as i32 + meta.node.cost() as i32;
+            let step_cost = self.conn.cost(state.prev_right_id, meta.node.left_id()) as i32
+                + meta.node.cost() as i32;
             for token_reading in &meta.match_variants {
                 let token_reading = token_reading.as_bytes();
                 if token_reading.is_empty() {

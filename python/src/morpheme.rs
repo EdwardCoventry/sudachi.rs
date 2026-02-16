@@ -120,6 +120,15 @@ impl PyMorphemeListWrapper {
         self.internal(py).get_internal_cost()
     }
 
+    /// Returns path cost with whitespace-bridged scoring.
+    ///
+    /// Tokenization itself is unchanged. This score ignores whitespace tokens and
+    /// connects neighboring non-whitespace tokens directly.
+    #[pyo3(text_signature = "(self, /) -> int")]
+    fn get_internal_cost_whitespace_bridged(&self, py: Python) -> i32 {
+        self.internal(py).get_internal_cost_whitespace_bridged()
+    }
+
     /// Returns the number of morpheme in this list.
     #[pyo3(text_signature = "(self, /) -> int")]
     fn size(&self, py: Python) -> usize {
