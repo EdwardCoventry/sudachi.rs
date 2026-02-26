@@ -28,7 +28,7 @@ use sudachi::prelude::{Morpheme, MorphemeList};
 use crate::dictionary::{extract_mode, PyDicData, PyDictionary};
 use crate::errors;
 use crate::projection::{MorphemeProjection, PyProjector};
-use crate::word_info::PyWordInfo;
+use crate::word_info::{is_non_inflected_pos, PyWordInfo};
 
 pub(crate) type PyMorphemeList = MorphemeList<Arc<PyDicData>>;
 const LEGACY_LEX_STRIDE: i32 = 100_000_000;
@@ -498,9 +498,14 @@ impl PyMorpheme {
     fn get_word_info(&self, py: Python) -> PyResult<PyWordInfo> {
         errors::warn_deprecation(py, c_str!("Users should not touch the raw WordInfo."))?;
         let morph = self.morph(py);
+        let is_non_inflected = is_non_inflected_pos(
+            morph.list.internal(py).dict().dictionary.grammar(),
+            morph.part_of_speech_id(),
+        );
         Ok(PyWordInfo::from_word_info(
             morph.get_word_info().clone(),
             morph.word_id(),
+            is_non_inflected,
         ))
     }
 

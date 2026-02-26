@@ -245,10 +245,10 @@ class MyTestCase(unittest.TestCase):
         cfg = replace(CFG_TEMPLATE, system=sys_dic, user=[u1_dic])
         tok = sudachipy.Dictionary(config=cfg).create()
         wi = tok.tokenize("テスト語")[0].get_word_info()
-        self.assertEqual(wi.dictionary_form_word_id, 200000002)
-        self.assertEqual(wi.dictionary_form_word_id_relative, 2)
-        self.assertEqual(wi.dictionary_form_word_id_packed, 200000002)
-        self.assertEqual(wi.dictionary_form_lex_id, 2)
+        self.assertEqual(wi.dictionary_form_word_id, -1)
+        self.assertEqual(wi.dictionary_form_word_id_relative, -1)
+        self.assertEqual(wi.dictionary_form_word_id_packed, -1)
+        self.assertEqual(wi.dictionary_form_lex_id, -1)
 
 
 if __name__ == '__main__':

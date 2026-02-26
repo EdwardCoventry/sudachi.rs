@@ -45,7 +45,7 @@ use crate::pos_matcher::PyPosMatcher;
 use crate::pretokenizer::PyPretokenizer;
 use crate::projection::{pyprojection, PyProjector};
 use crate::tokenizer::{PySplitMode, PyTokenizer};
-use crate::word_info::PyWordInfo;
+use crate::word_info::{is_non_inflected_pos, PyWordInfo};
 
 const LEGACY_LEX_STRIDE: u32 = 100_000_000;
 
@@ -461,7 +461,8 @@ impl PyDictionary {
         }
 
         let info = errors::wrap_ctx(lexicon.get_word_info(word_id), &word_id)?;
-        Ok(PyWordInfo::from_word_info(info, word_id))
+        let is_non_inflected = is_non_inflected_pos(dic.dictionary.grammar(), info.pos_id());
+        Ok(PyWordInfo::from_word_info(info, word_id, is_non_inflected))
     }
 
     /// Return per-dictionary lexicon sizes.
