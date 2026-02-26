@@ -73,11 +73,32 @@ fn unpack_native_word_id(raw_word_id: u32) -> (i32, i32) {
     }
 }
 
+fn clamp_u32_to_i32(value: u32) -> i32 {
+    if value > i32::MAX as u32 {
+        i32::MAX
+    } else {
+        value as i32
+    }
+}
+
 fn decode_dictionary_form_word_id(
     raw_dictionary_form_word_id: i32,
     default_lex_id: i32,
+    default_word_id: i32,
+    default_word_id_packed: u32,
+    default_word_id_relative: i32,
 ) -> (i32, i32, i32, i32) {
     if raw_dictionary_form_word_id == -1 {
+        // In Sudachi dictionaries, -1 means "same as this entry".
+        // Normalize it to the current token ids for non-OOV entries.
+        if default_lex_id >= 0 && default_word_id >= 0 && default_word_id_relative >= 0 {
+            return (
+                default_lex_id,
+                default_word_id,
+                clamp_u32_to_i32(default_word_id_packed),
+                default_word_id_relative,
+            );
+        }
         return (-1, -1, -1, -1);
     }
 
@@ -144,7 +165,13 @@ impl PyWordInfo {
             dictionary_form_word_id,
             dictionary_form_word_id_packed,
             dictionary_form_word_id_relative,
-        ) = decode_dictionary_form_word_id(word_info.dictionary_form_word_id, lex_id);
+        ) = decode_dictionary_form_word_id(
+            word_info.dictionary_form_word_id,
+            lex_id,
+            legacy_word_id,
+            packed_word_id,
+            relative_word_id,
+        );
 
         Self {
             word_id: legacy_word_id,
