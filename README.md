@@ -33,16 +33,36 @@ Dictionary-form metadata:
 - `dictionary_form_word_id_packed`
 - `dictionary_form_word_id_relative`
 - `dictionary_form_lex_id`
+- `is_dictionary_form`
+- `is_inflected`
 
 This lets callers determine source lexicon and dictionary-form source lexicon without app-side inference.
+
+Current runtime semantics for dictionary-form IDs:
+
+- fields are integer-only (no `"*"` output)
+- non-inflected tokens (POS conjugation type/form are `*`, `*`) expose:
+  - `dictionary_form_word_id = -1`
+  - `dictionary_form_word_id_packed = -1`
+  - `dictionary_form_word_id_relative = -1`
+  - `dictionary_form_lex_id = -1`
+  - `is_dictionary_form = true`
+  - `is_inflected = false`
+- inflected tokens with raw dictionary-form id `-1` resolve to self IDs (same `word_id` and `lex_id`)
+- inflected tokens with explicit dictionary-form references resolve to the referenced lemma IDs
 
 ## 2) Dictionary-form parsing and cross-lex behavior
 
 User dictionary build parsing accepts dictionary-form values with parity to existing workflows:
 
-- `*` and `-1` are treated as `WordId::INVALID` (self-fallback behavior)
+- `*` and `-1` are accepted as `WordId::INVALID` in CSV inputs
 - cross-lex references are preserved
 - cross-lex `10^8` offset IDs (`lex_id * 10^8 + relative_id`) are accepted where relevant
+
+Notes:
+
+- For inflected entries, `WordId::INVALID` resolves to self IDs at runtime.
+- For non-inflected entries, runtime `WordInfo` dictionary-form ID fields are exposed as `-1` (not self IDs), and `is_dictionary_form` should be used for dictionary-form checks.
 
 ## 3) User dictionary build/load additions for migration flows
 
