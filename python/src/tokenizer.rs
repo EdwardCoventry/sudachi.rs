@@ -29,6 +29,7 @@ use crate::dictionary::{extract_mode, PyDicData};
 use crate::errors;
 use crate::morpheme::PyMorphemeListWrapper;
 use crate::projection::PyProjector;
+use crate::word_info::{LEX_ID_OOV, WORD_ID_OOV};
 
 const LEGACY_LEX_STRIDE: i32 = 100_000_000;
 
@@ -255,20 +256,20 @@ impl PyTokenizer {
             for token in cand.tokens {
                 let tok = PyDict::new(py);
                 let packed_word_id = token.word_id.as_raw();
-                let dictionary_id = if token.word_id.is_oov() {
-                    -1
+                let lex_id = if token.word_id.is_oov() {
+                    LEX_ID_OOV
                 } else {
                     token.word_id.dic() as i32
                 };
                 let relative_word_id = if token.word_id.is_oov() {
-                    -1
+                    WORD_ID_OOV
                 } else {
                     token.word_id.word() as i32
                 };
-                let legacy_word_id = if dictionary_id <= 0 {
+                let legacy_word_id = if lex_id <= 0 {
                     relative_word_id
                 } else {
-                    dictionary_id * LEGACY_LEX_STRIDE + relative_word_id
+                    lex_id * LEGACY_LEX_STRIDE + relative_word_id
                 };
 
                 tok.set_item("surface", token.surface)?;
@@ -278,8 +279,7 @@ impl PyTokenizer {
                 tok.set_item("word_id", legacy_word_id)?;
                 tok.set_item("word_id_relative", relative_word_id)?;
                 tok.set_item("word_id_packed", packed_word_id)?;
-                tok.set_item("dictionary_id", dictionary_id)?;
-                tok.set_item("lex_id", dictionary_id)?;
+                tok.set_item("lex_id", lex_id)?;
                 tokens.append(tok)?;
             }
 

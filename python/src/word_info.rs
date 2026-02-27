@@ -24,6 +24,10 @@ const LEGACY_LEX_STRIDE: i32 = 100_000_000;
 const NATIVE_LEX_SHIFT: u32 = 28;
 const NATIVE_WORD_MASK: u32 = 0x0fff_ffff;
 const NATIVE_OOV_DIC_ID: i32 = 0xf;
+pub(crate) const LEX_ID_MISSING: i32 = -1;
+pub(crate) const LEX_ID_OOV: i32 = -2;
+pub(crate) const WORD_ID_MISSING: i32 = -1;
+pub(crate) const WORD_ID_OOV: i32 = -2;
 
 #[pyclass(module = "sudachipy.wordinfo", name = "WordInfo", get_all)]
 pub struct PyWordInfo {
@@ -31,7 +35,6 @@ pub struct PyWordInfo {
     word_id_packed: u32,
     word_id_relative: i32,
     lex_id: i32,
-    dictionary_id: i32,
     surface: String,
     head_word_length: u16,
     pos_id: u16,
@@ -70,7 +73,7 @@ fn unpack_native_word_id(raw_word_id: u32) -> (i32, i32) {
     let lex_id = ((raw_word_id >> NATIVE_LEX_SHIFT) & 0xf) as i32;
     let word_id = (raw_word_id & NATIVE_WORD_MASK) as i32;
     if lex_id == NATIVE_OOV_DIC_ID {
-        (-1, word_id)
+        (LEX_ID_OOV, word_id)
     } else {
         (lex_id, word_id)
     }
@@ -92,16 +95,31 @@ fn decode_dictionary_form_word_id(
     default_word_id_relative: i32,
     is_non_inflected: bool,
 ) -> (i32, i32, i32, i32, bool) {
+    // OOV tokens use dedicated OOV sentinels (-2), distinct from
+    // "missing/non-lexicon dictionary form" sentinels (-1).
+    if default_lex_id == LEX_ID_OOV {
+        return (LEX_ID_OOV, WORD_ID_OOV, WORD_ID_OOV, WORD_ID_OOV, false);
+    }
+
     // Non-inflected POS entries (conjugation type/form: "*", "*") do not expose
     // dictionary-form ids via WordInfo and are represented as -1.
     if is_non_inflected {
-        return (-1, -1, -1, -1, true);
+        return (
+            LEX_ID_MISSING,
+            WORD_ID_MISSING,
+            WORD_ID_MISSING,
+            WORD_ID_MISSING,
+            true,
+        );
     }
 
-    if raw_dictionary_form_word_id == -1 {
+    if raw_dictionary_form_word_id == WORD_ID_MISSING {
         // In Sudachi dictionaries, -1 means "same as this entry".
-        // Normalize it to the current token ids for inflected non-OOV entries.
-        if default_lex_id >= 0 && default_word_id >= 0 && default_word_id_relative >= 0 {
+        // Normalize it to the current token ids for inflected entries.
+        if default_lex_id != LEX_ID_MISSING
+            && default_word_id != WORD_ID_MISSING
+            && default_word_id_relative != WORD_ID_MISSING
+        {
             return (
                 default_lex_id,
                 default_word_id,
@@ -110,7 +128,13 @@ fn decode_dictionary_form_word_id(
                 false,
             );
         }
-        return (-1, -1, -1, -1, false);
+        return (
+            LEX_ID_MISSING,
+            WORD_ID_MISSING,
+            WORD_ID_MISSING,
+            WORD_ID_MISSING,
+            false,
+        );
     }
 
     let raw = raw_dictionary_form_word_id as u32;
@@ -175,7 +199,7 @@ impl PyWordInfo {
     ) -> Self {
         let word_info: WordInfoData = word_info.into();
         let (lex_id, legacy_word_id, packed_word_id, relative_word_id) = if word_id.is_oov() {
-            (-1, -1, word_id.as_raw(), -1)
+            (LEX_ID_OOV, WORD_ID_OOV, word_id.as_raw(), WORD_ID_OOV)
         } else {
             let lex_id = word_id.dic() as i32;
             let relative_word_id = word_id.word() as i32;
@@ -205,7 +229,6 @@ impl PyWordInfo {
             word_id_packed: packed_word_id,
             word_id_relative: relative_word_id,
             lex_id,
-            dictionary_id: lex_id,
             head_word_length: word_info.head_word_length,
             pos_id: word_info.pos_id,
             normalized_form: copy_if_empty(word_info.normalized_form, &word_info.surface),

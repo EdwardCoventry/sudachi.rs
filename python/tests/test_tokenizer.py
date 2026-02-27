@@ -76,18 +76,18 @@ class TestTokenizer(unittest.TestCase):
         ms = self.tokenizer_obj.tokenize('京')
         self.assertEqual(1, len(ms))
 
-    def test_get_dictionary_id(self):
+    def test_get_lex_id(self):
         ms = self.tokenizer_obj.tokenize('京都')
         self.assertEqual(1, ms.size())
-        self.assertEqual(0, ms[0].dictionary_id())
+        self.assertEqual(0, ms[0].lex_id())
 
         ms = self.tokenizer_obj.tokenize('ぴらる')
         self.assertEqual(1, ms.size())
-        self.assertEqual(1, ms[0].dictionary_id())
+        self.assertEqual(1, ms[0].lex_id())
 
         ms = self.tokenizer_obj.tokenize('京')
         self.assertEqual(1, ms.size())
-        self.assertTrue(ms[0].dictionary_id() < 0)
+        self.assertEqual(-2, ms[0].lex_id())
 
     def test_get_synonym_group_ids(self):
         ms = self.tokenizer_obj.tokenize('京都')

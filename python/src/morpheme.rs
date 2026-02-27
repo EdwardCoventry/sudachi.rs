@@ -28,7 +28,7 @@ use sudachi::prelude::{Morpheme, MorphemeList};
 use crate::dictionary::{extract_mode, PyDicData, PyDictionary};
 use crate::errors;
 use crate::projection::{MorphemeProjection, PyProjector};
-use crate::word_info::{is_non_inflected_pos, PyWordInfo};
+use crate::word_info::{is_non_inflected_pos, PyWordInfo, LEX_ID_OOV, WORD_ID_OOV};
 
 pub(crate) type PyMorphemeList = MorphemeList<Arc<PyDicData>>;
 const LEGACY_LEX_STRIDE: i32 = 100_000_000;
@@ -443,7 +443,7 @@ impl PyMorpheme {
     fn word_id(&self, py: Python) -> i32 {
         let word_id = self.morph(py).word_id();
         if word_id.is_oov() {
-            return -1;
+            return WORD_ID_OOV;
         }
         let lex_id = word_id.dic() as i32;
         let relative_word_id = word_id.word() as i32;
@@ -459,7 +459,7 @@ impl PyMorpheme {
     fn word_id_relative(&self, py: Python) -> i32 {
         let word_id = self.morph(py).word_id();
         if word_id.is_oov() {
-            -1
+            WORD_ID_OOV
         } else {
             word_id.word() as i32
         }
@@ -471,12 +471,12 @@ impl PyMorpheme {
         self.morph(py).word_id().as_raw()
     }
 
-    /// Returns the dictionary id which this word belongs.
+    /// Returns the source lexicon id which this word belongs.
     #[pyo3(text_signature = "(self, /) -> int")]
-    fn dictionary_id(&self, py: Python) -> i32 {
+    fn lex_id(&self, py: Python) -> i32 {
         let word_id = self.morph(py).word_id();
         if word_id.is_oov() {
-            -1
+            LEX_ID_OOV
         } else {
             word_id.dic() as i32
         }

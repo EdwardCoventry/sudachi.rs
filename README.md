@@ -25,7 +25,7 @@ For general Sudachi installation, CLI usage, and baseline Python API docs, see u
 - `word_id`: cross-lex `10^8` offset integer (`lex_id * 10^8 + relative_word_id`)
 - `word_id_packed`: native internal packed u32
 - `word_id_relative`: ID relative to the current lexicon
-- `lex_id` and `dictionary_id`: dictionary index for the token
+- `lex_id`: source lexicon id for the token
 
 Dictionary-form metadata:
 
@@ -37,6 +37,14 @@ Dictionary-form metadata:
 - `is_inflected`
 
 This lets callers determine source lexicon and dictionary-form source lexicon without app-side inference.
+
+Current runtime semantics for lex ids:
+
+- `0` = system dictionary
+- `>0` = user/custom dictionaries supplied to Sudachi
+- `-1` = missing/non-lexicon placeholder
+- `-2` = OOV/special token
+- `<-2` values are reserved for custom post-processing lex ids
 
 Current runtime semantics for dictionary-form IDs:
 

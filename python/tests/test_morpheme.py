@@ -81,15 +81,15 @@ class TestTokenizer(unittest.TestCase):
         self.assertEqual(m.normalized_form(), 'ぴらる')
         self.assertEqual(m.reading_form(), 'ピラル')
 
-    def test_morpheme_dictionary_id(self):
+    def test_morpheme_lex_id(self):
         m = self.tokenizer_obj.tokenize('京都')[0]
-        self.assertEqual(m.dictionary_id(), 0)
+        self.assertEqual(m.lex_id(), 0)
 
         m = self.tokenizer_obj.tokenize('ぴらる')[0]
-        self.assertEqual(m.dictionary_id(), 1)
+        self.assertEqual(m.lex_id(), 1)
 
         m = self.tokenizer_obj.tokenize('京')[0]
-        self.assertTrue(m.dictionary_id() < 0)
+        self.assertEqual(m.lex_id(), -2)
 
     def test_morpheme_word_id(self):
         m = self.tokenizer_obj.tokenize('京都')[0]

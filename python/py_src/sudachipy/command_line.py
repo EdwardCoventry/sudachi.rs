@@ -73,7 +73,7 @@ def run(tokenizer, input_, output, print_all, pos_list, is_stdout):
                 list_info += [
                     m.dictionary_form(),
                     m.reading_form(),
-                    str(m.dictionary_id()),
+                    str(m.lex_id()),
                     '[{}]'.format(','.join([str(synonym_group_id) for synonym_group_id in m.synonym_group_ids()]))]
                 if m.is_oov():
                     list_info.append("(OOV)")

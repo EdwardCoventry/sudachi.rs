@@ -66,7 +66,7 @@ class TestDictionary(unittest.TestCase):
         self.assertEqual(2**28 + 2, wi.word_id_packed)
         self.assertEqual(2, wi.word_id_relative)
         self.assertEqual(1, wi.lex_id)
-        self.assertEqual(ms[0].dictionary_id(), wi.dictionary_id)
+        self.assertEqual(ms[0].lex_id(), wi.lex_id)
         self.assertEqual("東京府", wi.surface)
         self.assertEqual([5, 2**28 + 1], wi.a_unit_split)
 
@@ -75,7 +75,7 @@ class TestDictionary(unittest.TestCase):
         self.assertEqual(2**28 + 1, split_info.word_id_packed)
         self.assertEqual(1, split_info.word_id_relative)
         self.assertEqual(1, split_info.lex_id)
-        self.assertEqual(1, split_info.dictionary_id)
+        self.assertEqual(1, split_info.lex_id)
         self.assertEqual("府", split_info.surface)
 
     def test_word_info_by_id_invalid(self):

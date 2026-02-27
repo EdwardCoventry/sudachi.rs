@@ -83,7 +83,7 @@ class MyTestCase(unittest.TestCase):
         tok = dict.create()
         result = tok.tokenize("すだちにいく")
         self.assertEqual(result.size(), 3)
-        self.assertEqual(result[0].dictionary_id(), 1)
+        self.assertEqual(result[0].lex_id(), 1)
 
     def test_build_user_bytes(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
@@ -106,7 +106,7 @@ class MyTestCase(unittest.TestCase):
         tok = dict.create()
         result = tok.tokenize("すだちにいく")
         self.assertEqual(result.size(), 3)
-        self.assertEqual(result[0].dictionary_id(), 1)
+        self.assertEqual(result[0].lex_id(), 1)
 
     def test_build_user_bytes_from_lex_bytes(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
@@ -129,7 +129,7 @@ class MyTestCase(unittest.TestCase):
         tok = sudachipy.Dictionary(config=cfg, user_data=[u1_dic_bytes]).create()
         result = tok.tokenize("すだちにいく")
         self.assertEqual(result.size(), 3)
-        self.assertEqual(result[0].dictionary_id(), 1)
+        self.assertEqual(result[0].lex_id(), 1)
 
     def test_build_user2(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
@@ -160,18 +160,18 @@ class MyTestCase(unittest.TestCase):
         tok = dict.create()
         result = tok.tokenize("かぼすにいく")
         self.assertEqual(result.size(), 3)
-        self.assertEqual(result[0].dictionary_id(), 2)
+        self.assertEqual(result[0].lex_id(), 2)
         self.assertEqual(result[0].part_of_speech()[0], "被子植物門")
         wi = dict.word_info(result[0].word_id())
         self.assertEqual(wi.lex_id, 2)
-        self.assertEqual(wi.dictionary_id, 2)
+        self.assertEqual(wi.lex_id, 2)
         self.assertEqual(wi.word_id, 200000001)
         self.assertEqual(wi.word_id_packed, 2 * 2**28 + 1)
         self.assertEqual(wi.word_id_relative, 1)
         self.assertEqual(wi.surface, "かぼす")
 
         comp = tok.tokenize("東京府")
-        self.assertEqual(comp[0].dictionary_id(), 1)
+        self.assertEqual(comp[0].lex_id(), 1)
         comp_wi = dict.word_info(comp[0].word_id())
         self.assertEqual(comp_wi.a_unit_split, [5, 2**28 + 1])
         split_wi = dict.word_info(comp_wi.a_unit_split[1])
@@ -180,7 +180,7 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(split_wi.word_id_relative, 1)
         self.assertEqual(split_wi.lex_id, 1)
         self.assertEqual(split_wi.surface, "府")
-        self.assertEqual(split_wi.dictionary_id, 1)
+        self.assertEqual(split_wi.lex_id, 1)
 
     def test_user_dictionary_form_reference(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)

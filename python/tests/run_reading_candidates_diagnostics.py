@@ -143,7 +143,7 @@ def _token_dict(m: Any) -> dict[str, Any]:
         "surface": m.surface(),
         "reading_form": m.reading_form(),
         "pos": pos,
-        "dictionary_id": m.dictionary_id(),
+        "lex_id": m.lex_id(),
         "word_id": m.word_id(),
     }
 
