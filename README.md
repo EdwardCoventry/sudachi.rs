@@ -120,6 +120,30 @@ Bridge scoring and global whitespace-bridge tokenization treat all of the follow
 
 This keeps costs connected across spacing/ellipsis separators without changing token output.
 
+## 7) Forced-split tokenization by whitespace
+
+New API to tokenize text while **enforcing token boundaries at whitespace positions**:
+
+- whitespace is removed before analysis
+- each boundary between whitespace-separated segments is mandatory
+- best path is chosen under those boundary constraints
+
+Python (`Tokenizer`):
+
+- `tokenize_forced_splits(text, mode=None)`
+
+Typical usage:
+
+- force boundaries from compound specs where spaces are semantic split markers
+- e.g. `"いや いや"` enforces a split in `"いやいや"` and returns best-cost tokens under that constraint
+
+Example:
+
+- input: `"いや いや"`
+- analyzed text: `"いやいや"`
+- enforced boundary: between the two `いや`
+- output tokens: `["いや", "いや"]`
+
 ## Install this fork
 
 Install from GitHub (works on another machine):

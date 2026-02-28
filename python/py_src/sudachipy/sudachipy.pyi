@@ -411,6 +411,20 @@ class Tokenizer:
         """
         ...
 
+    def tokenize_forced_splits(
+        self,
+        text: str,
+        mode: Union[SplitMode, SplitModeStr, None] = None,
+        out: Optional[MorphemeList] = None,
+    ) -> MorphemeList:
+        """
+        Break text into morphemes while forcing a token boundary at each whitespace split.
+
+        Whitespace is removed before analysis, but each boundary between whitespace-separated
+        segments is treated as a mandatory token boundary.
+        """
+        ...
+
     def tokenize_reading_candidates(
         self,
         text: str,

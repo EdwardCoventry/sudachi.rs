@@ -33,6 +33,40 @@ use crate::word_info::{LEX_ID_OOV, WORD_ID_OOV};
 
 const LEGACY_LEX_STRIDE: i32 = 100_000_000;
 
+fn strip_forced_split_whitespace(text: &str) -> (String, Vec<usize>) {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !current.is_empty() {
+                segments.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+
+    if segments.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let mut joined = String::new();
+    let mut boundaries = Vec::new();
+    let mut offset = 0usize;
+    for (idx, segment) in segments.iter().enumerate() {
+        if idx > 0 {
+            boundaries.push(offset);
+        }
+        joined.push_str(segment);
+        offset += segment.chars().count();
+    }
+
+    (joined, boundaries)
+}
+
 /// Unit to split text.
 ///
 /// A == short mode
@@ -171,6 +205,69 @@ impl PyTokenizer {
             py.detach(|| {
                 tokenizer.reset().push_str(text);
                 tokenizer.do_tokenize()
+            }),
+            "Error during tokenization",
+        )?;
+
+        let out_list = match out {
+            None => {
+                let dict = tokenizer.dict_clone();
+                let morphemes = MorphemeList::empty(dict);
+                let wrapper =
+                    PyMorphemeListWrapper::from_components(morphemes, self.projection.clone());
+                Bound::new(py, wrapper)?
+            }
+            Some(list) => list,
+        };
+
+        let mut borrow = out_list.try_borrow_mut();
+        let morphemes = match borrow {
+            Ok(ref mut ms) => ms.internal_mut(py),
+            Err(_) => return errors::wrap(Err("out was used twice at the same time")),
+        };
+
+        errors::wrap_ctx(
+            morphemes.collect_results(tokenizer.deref_mut()),
+            "Error during tokenization",
+        )?;
+
+        Ok(out_list)
+    }
+
+    /// Break text into morphemes while forcing boundaries at whitespace positions.
+    ///
+    /// Whitespace is removed before analysis, but each whitespace-separated segment
+    /// boundary is treated as a mandatory token boundary.
+    #[pyo3(
+        text_signature="(self, /, text: str, mode=None, logger=None, out=None) -> MorphemeList",
+        signature=(text, mode=None, logger=None, out=None)
+    )]
+    #[allow(unused_variables)]
+    fn tokenize_forced_splits<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        text: &'py str,
+        mode: Option<&Bound<'py, PyAny>>,
+        logger: Option<Py<PyAny>>,
+        out: Option<Bound<'py, PyMorphemeListWrapper>>,
+    ) -> PyResult<Bound<'py, PyMorphemeListWrapper>> {
+        let (joined_text, forced_boundaries) = strip_forced_split_whitespace(text);
+
+        // restore default mode on scope exit
+        let mode = match mode {
+            None => None,
+            Some(m) => Some(extract_mode(m)?),
+        };
+        let default_mode = mode.map(|m| self.tokenizer.set_mode(m));
+        let mut tokenizer = scopeguard::guard(&mut self.tokenizer, |t| {
+            default_mode.map(|m| t.set_mode(m));
+        });
+
+        // analysis can be done without GIL
+        errors::wrap_ctx(
+            py.detach(|| {
+                tokenizer.reset().push_str(&joined_text);
+                tokenizer.do_tokenize_with_forced_boundaries(&forced_boundaries)
             }),
             "Error during tokenization",
         )?;

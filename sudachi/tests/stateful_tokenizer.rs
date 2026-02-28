@@ -192,6 +192,57 @@ fn morpheme_extraction() {
     assert_eq!(3, e.end_c());
 }
 
+fn tokenize_with_forced_boundaries(
+    tok: &mut TestTokenizer,
+    text: &str,
+    forced_boundaries: &[usize],
+) -> Vec<String> {
+    tok.tok.reset().push_str(text);
+    tok.tok
+        .do_tokenize_with_forced_boundaries(forced_boundaries)
+        .expect("forced tokenization failed");
+    tok.result
+        .collect_results(&mut tok.tok)
+        .expect("collection failed");
+    tok.result.iter().map(|m| m.surface().to_string()).collect()
+}
+
+#[test]
+fn forced_split_repeated_interjection() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    let surfaces = tokenize_with_forced_boundaries(&mut tok, "いやいや", &[2]);
+    assert_eq!("いやいや", surfaces.concat());
+    let spans: Vec<(usize, usize)> = tok.result.iter().map(|m| (m.begin_c(), m.end_c())).collect();
+    assert!(spans.iter().all(|(b, e)| !(*b < 2 && 2 < *e)));
+    assert!(spans.iter().any(|(_, e)| *e == 2));
+}
+
+#[test]
+fn forced_split_prevents_cross_boundary_token() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    let normal_surfaces: Vec<String> = tok.tokenize("東京都").iter().map(|m| m.surface().to_string()).collect();
+    assert_eq!(vec!["東京都".to_string()], normal_surfaces);
+
+    let forced_surfaces = tokenize_with_forced_boundaries(&mut tok, "東京都", &[2]);
+    assert_eq!(vec!["東京".to_string(), "都".to_string()], forced_surfaces);
+
+    let spans: Vec<(usize, usize)> = tok.result.iter().map(|m| (m.begin_c(), m.end_c())).collect();
+    assert!(spans.iter().all(|(b, e)| !(*b < 2 && 2 < *e)));
+    assert!(spans.iter().any(|(_, e)| *e == 2));
+}
+
+#[test]
+fn forced_split_empty_boundaries_matches_default_tokenize() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    let normal_surfaces: Vec<String> = tok
+        .tokenize("東京都へ行く")
+        .iter()
+        .map(|m| m.surface().to_string())
+        .collect();
+    let forced_surfaces = tokenize_with_forced_boundaries(&mut tok, "東京都へ行く", &[]);
+    assert_eq!(normal_surfaces, forced_surfaces);
+}
+
 #[test]
 fn global_whitespace_bridge_keeps_surface_sequence_and_non_increasing_cost() {
     let text = "すもも も もも も ももの うち";

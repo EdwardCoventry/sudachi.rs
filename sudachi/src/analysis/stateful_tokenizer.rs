@@ -176,6 +176,31 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
         Ok(())
     }
 
+    /// Perform tokenization while forcing token boundaries at the provided character offsets.
+    /// Offsets are in the rewritten-input character space and must exclude BOS (0) and EOS.
+    pub fn do_tokenize_with_forced_boundaries(
+        &mut self,
+        forced_boundaries: &[usize],
+    ) -> SudachiResult<()> {
+        if forced_boundaries.is_empty() {
+            return self.do_tokenize();
+        }
+
+        self.input.start_build()?;
+        self.rewrite_input()?;
+        self.input.build(self.dictionary.grammar())?;
+
+        if self.input.current().is_empty() {
+            return Ok(());
+        }
+
+        self.build_lattice()?;
+        let mut path = self.resolve_best_path_with_forced_boundaries(forced_boundaries)?;
+        path = split_path(&self.dictionary, path, self.mode, self.subset, &self.input)?;
+        self.top_path = Some(path);
+        Ok(())
+    }
+
     /// Resolve the path (as ResultNodes) with the smallest cost
     fn resolve_best_path(&mut self) -> SudachiResult<Vec<ResultNode>> {
         let lex = self.dictionary.lexicon();
@@ -208,6 +233,91 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
             ));
         }
         Ok(path)
+    }
+
+    fn resolve_best_path_with_forced_boundaries(
+        &self,
+        forced_boundaries: &[usize],
+    ) -> SudachiResult<Vec<ResultNode>> {
+        let mut sorted_boundaries = forced_boundaries.to_vec();
+        sorted_boundaries.sort_unstable();
+        sorted_boundaries.dedup();
+
+        let boundary_count = self.lattice.boundary_count();
+        if boundary_count <= 1 {
+            return Ok(Vec::new());
+        }
+
+        let max_inner_boundary = boundary_count - 1;
+        for &boundary in &sorted_boundaries {
+            if boundary == 0 || boundary >= max_inner_boundary {
+                return Err(SudachiError::InvalidRange(boundary, max_inner_boundary));
+            }
+        }
+
+        let mut constrained_lattice = Lattice::default();
+        constrained_lattice.set_global_whitespace_bridge(self.global_whitespace_bridge);
+        constrained_lattice.reset(boundary_count - 1);
+
+        let conn = self.dictionary.grammar().conn_matrix();
+        for end in 1..boundary_count {
+            for node in self.lattice.nodes_ending_at(end) {
+                if Self::node_crosses_forced_boundary(node, &sorted_boundaries) {
+                    continue;
+                }
+                constrained_lattice.insert(node.clone(), conn);
+            }
+        }
+        constrained_lattice.connect_eos(conn)?;
+        self.resolve_best_path_from_lattice(&constrained_lattice)
+    }
+
+    fn resolve_best_path_from_lattice(&self, lattice: &Lattice) -> SudachiResult<Vec<ResultNode>> {
+        let lex = self.dictionary.lexicon();
+        let mut path = Vec::new();
+        let mut top_path_ids = Vec::new();
+        lattice.fill_top_path(&mut top_path_ids);
+        top_path_ids.reverse();
+
+        for pid in top_path_ids {
+            let (inner, cost) = lattice.node(pid);
+            let wi = if inner.word_id().is_oov() {
+                let curr_slice = self.input.curr_slice_c(inner.char_range()).to_owned();
+                WordInfoData {
+                    pos_id: inner.word_id().word() as u16,
+                    surface: curr_slice,
+                    ..Default::default()
+                }
+                .into()
+            } else {
+                lex.get_word_info_subset(inner.word_id(), self.subset)?
+            };
+
+            let byte_begin = self.input.to_curr_byte_idx(inner.begin());
+            let byte_end = self.input.to_curr_byte_idx(inner.end());
+
+            path.push(ResultNode::new(
+                inner.clone(),
+                cost,
+                byte_begin as u16,
+                byte_end as u16,
+                wi,
+            ));
+        }
+
+        Ok(path)
+    }
+
+    #[inline]
+    fn node_crosses_forced_boundary(node: &Node, forced_boundaries: &[usize]) -> bool {
+        if forced_boundaries.is_empty() {
+            return false;
+        }
+
+        let begin = node.begin();
+        let end = node.end();
+        let idx = forced_boundaries.partition_point(|&boundary| boundary <= begin);
+        idx < forced_boundaries.len() && forced_boundaries[idx] < end
     }
 
     /// Swap result data with the current analyzer
