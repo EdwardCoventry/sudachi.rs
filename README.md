@@ -35,6 +35,20 @@ Public boundary rule:
 - split arrays in `WordInfo` strip packed user-lex ids to cross-lex ids when they are unambiguous
 - small relative split ids remain relative because they are lex-context-dependent, not packed
 
+This fork keeps two parallel views of the same real lexicon entry:
+
+- public/cross-lex: `lex_id * 10^8 + relative_word_id`
+- internal/native packed: `(lex_id << 28) | relative_word_id`
+
+Example for a real token with `lex_id = 3` and `relative_word_id = 500`:
+
+- `word_id = 300000500`
+- `word_id_packed = 805306868`
+- `word_id_relative = 500`
+- `lex_id = 3`
+
+`Dictionary.word_info(300000500)` resolves that token and `WordInfo` exposes all four values above.
+
 Dictionary-form metadata:
 
 - `dictionary_form_word_id`
@@ -45,7 +59,12 @@ Dictionary-form metadata:
 - `is_inflected`
 
 This lets callers determine source lexicon and dictionary-form source lexicon without app-side inference.
-For real lexicon entries, `dictionary_form_word_id_packed` is the canonical native packed ID, while `dictionary_form_word_id` remains cross-lex.
+For real lexicon entries:
+
+- `dictionary_form_word_id` is always cross-lex
+- `dictionary_form_word_id_packed` is always the canonical native packed ID
+- `dictionary_form_word_id_relative` is always lex-relative
+- `dictionary_form_lex_id` is always the source lex id
 
 Current runtime semantics for lex ids:
 
@@ -70,14 +89,16 @@ Current runtime semantics for dictionary-form IDs:
 
 ## 2) Dictionary-form parsing and cross-lex behavior
 
-User dictionary build parsing accepts dictionary-form values with parity to existing workflows:
+For user-dictionary CSV inputs, dictionary-form id values keep compatibility with existing workflows:
 
-- `*` and `-1` are accepted as `WordId::INVALID` in CSV inputs
+- `*` and `-1` are accepted in the dictionary-form id column and treated as `WordId::INVALID`
 - cross-lex references are preserved
 - cross-lex `10^8` offset IDs (`lex_id * 10^8 + relative_id`) are accepted where relevant
 
 Notes:
 
+- the Python bridge does not special-case CSV parsing itself; it forwards lexicon data to Sudachi's builder
+- this fork has regression coverage for both `*` and `-1` dictionary-form id inputs
 - For inflected entries, `WordId::INVALID` resolves to self IDs at runtime.
 - For non-inflected entries, runtime `WordInfo` dictionary-form ID fields are exposed as `-1` (not self IDs), and `is_dictionary_form` should be used for dictionary-form checks.
 
@@ -90,26 +111,7 @@ Python bindings include byte-oriented paths in addition to file-based flows:
 
 File-based build workflows remain available.
 
-## 4) Reading-constrained candidate tokenization
-
-New API to enumerate all tokenization candidates whose concatenated reading matches a given reading string, sorted by total path cost.
-
-Rust (`StatefulTokenizer`):
-
-- `reading_candidates(reading, max_results)`
-- `reading_candidates_with_min_tokens(reading, max_results, min_tokens)`
-
-Python (`Tokenizer`):
-
-- `tokenize_reading_candidates(text, reading, max_results=64, min_tokens=1)`
-
-Notes:
-
-- `min_tokens` default is `1`
-- use `min_tokens=2` to suppress one-token exact matches
-- matching includes normalization for width/case and kana normalization to improve practical matching
-
-## 5) Tests added for fork behavior
+## 4) Tests added for fork behavior
 
 Fork-specific tests include coverage for:
 
@@ -118,7 +120,16 @@ Fork-specific tests include coverage for:
 - variant matching (case/width/kana/symbol-like cases)
 - user dictionary build and ID-field compatibility cases
 
-## 6) Whitespace bridge and ellipsis separators
+## 5) New tokenization methods
+
+### 5.1) Whitespace bridge and ellipsis separators
+
+Whitespace bridging is a scoring feature, not a different token output format.
+
+Python (`Tokenizer` / `MorphemeList`):
+
+- `set_global_whitespace_bridge(enabled)`
+- `get_internal_cost_whitespace_bridged()`
 
 Bridge scoring and global whitespace-bridge tokenization treat all of the following as bridge separators:
 
@@ -129,7 +140,7 @@ Bridge scoring and global whitespace-bridge tokenization treat all of the follow
 
 This keeps costs connected across spacing/ellipsis separators without changing token output.
 
-## 7) Forced-split tokenization by whitespace
+### 5.2) Forced-split tokenization by whitespace
 
 New API to tokenize text while **enforcing token boundaries at whitespace positions**:
 
@@ -152,6 +163,25 @@ Example:
 - analyzed text: `"いやいや"`
 - enforced boundary: between the two `いや`
 - output tokens: `["いや", "いや"]`
+
+### 5.3) Reading-constrained candidate tokenization
+
+New API to enumerate all tokenization candidates whose concatenated reading matches a given reading string, sorted by total path cost.
+
+Rust (`StatefulTokenizer`):
+
+- `reading_candidates(reading, max_results)`
+- `reading_candidates_with_min_tokens(reading, max_results, min_tokens)`
+
+Python (`Tokenizer`):
+
+- `tokenize_reading_candidates(text, reading, max_results=64, min_tokens=1)`
+
+Notes:
+
+- `min_tokens` default is `1`
+- use `min_tokens=2` to suppress one-token exact matches
+- matching includes normalization for width/case and kana normalization to improve practical matching
 
 ## Install this fork
 

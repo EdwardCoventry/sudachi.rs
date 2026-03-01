@@ -250,6 +250,40 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(wi.dictionary_form_word_id_packed, -1)
         self.assertEqual(wi.dictionary_form_lex_id, -1)
 
+    def test_user_dictionary_form_reference_minus_one(self):
+        sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
+        self.tempfiles.append(sys_dic)
+        sudachipy.sudachipy.build_system_dic(
+            matrix=RESOURCES_PATH / "matrix.def",
+            lex=[RESOURCES_PATH / "lex.csv"],
+            output=sys_dic
+        )
+
+        user_csv = Path(self.tmpdir) / "user_dic_form_minus_one.csv"
+        user_csv.write_text(
+            "テスト動詞,6,6,1000,テスト動詞,動詞,一般,*,*,五段-カ行,終止形-一般,テストドウシ,テスト動詞,-1,A,*,*,*,*\n",
+            encoding="utf-8",
+        )
+        self.tempfiles.append(str(user_csv))
+
+        u1_dic = tempfile.mktemp(prefix="sudachi_u1", suffix=".dic", dir=self.tmpdir)
+        self.tempfiles.append(u1_dic)
+        sudachipy.sudachipy.build_user_dic(
+            system=sys_dic,
+            lex=[user_csv],
+            output=u1_dic
+        )
+
+        cfg = replace(CFG_TEMPLATE, system=sys_dic, user=[u1_dic])
+        tok = sudachipy.Dictionary(config=cfg).create()
+        wi = tok.tokenize("テスト動詞")[0].get_word_info()
+        self.assertEqual(wi.word_id, wi.dictionary_form_word_id)
+        self.assertEqual(wi.word_id_packed, wi.dictionary_form_word_id_packed)
+        self.assertEqual(wi.word_id_relative, wi.dictionary_form_word_id_relative)
+        self.assertEqual(wi.lex_id, wi.dictionary_form_lex_id)
+        self.assertTrue(wi.is_dictionary_form)
+        self.assertTrue(wi.is_inflected)
+
     def test_word_info_accepts_cross_lex_zero_relative_ids_for_higher_lexes(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
         self.tempfiles.append(sys_dic)
@@ -285,6 +319,71 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(300000000, wi.word_id)
         self.assertEqual(0, wi.word_id_relative)
         self.assertEqual("第三語", wi.surface)
+
+    def test_word_info_exposes_expected_ids_for_lex_3_row_500(self):
+        sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
+        self.tempfiles.append(sys_dic)
+        sudachipy.sudachipy.build_system_dic(
+            matrix=RESOURCES_PATH / "matrix.def",
+            lex=[RESOURCES_PATH / "lex.csv"],
+            output=sys_dic
+        )
+
+        user_dics = []
+        for idx, surface in enumerate(("第一語", "第二語"), start=1):
+            user_csv = Path(self.tmpdir) / f"fixed_user_{idx}.csv"
+            user_csv.write_text(
+                f"{surface},6,6,1000,{surface},名詞,普通名詞,一般,*,*,*,{surface},{surface},*,A,*,*,*,*\n",
+                encoding="utf-8",
+            )
+            self.tempfiles.append(str(user_csv))
+
+            user_dic = tempfile.mktemp(prefix=f"sudachi_fixed_u{idx}", suffix=".dic", dir=self.tmpdir)
+            self.tempfiles.append(user_dic)
+            sudachipy.sudachipy.build_user_dic(
+                system=sys_dic,
+                lex=[user_csv],
+                output=user_dic
+            )
+            user_dics.append(user_dic)
+
+        target_surface = "第三辞書行500"
+        lex3_rows = []
+        for idx in range(501):
+            surface = f"第三辞書行{idx}"
+            lex3_rows.append(
+                f"{surface},6,6,1000,{surface},名詞,普通名詞,一般,*,*,*,{surface},{surface},*,A,*,*,*,*"
+            )
+        user3_csv = Path(self.tmpdir) / "user_lex3_500.csv"
+        user3_csv.write_text("\n".join(lex3_rows) + "\n", encoding="utf-8")
+        self.tempfiles.append(str(user3_csv))
+
+        user3_dic = tempfile.mktemp(prefix="sudachi_u3_many", suffix=".dic", dir=self.tmpdir)
+        self.tempfiles.append(user3_dic)
+        sudachipy.sudachipy.build_user_dic(
+            system=sys_dic,
+            lex=[user3_csv],
+            output=user3_dic
+        )
+        user_dics.append(user3_dic)
+
+        cfg = replace(CFG_TEMPLATE, system=sys_dic, user=user_dics)
+        dict = sudachipy.Dictionary(config=cfg)
+        tok = dict.create()
+
+        token_wi = tok.tokenize(target_surface)[0].get_word_info()
+        self.assertEqual(3, token_wi.lex_id)
+        self.assertEqual(500, token_wi.word_id_relative)
+        self.assertEqual(300000500, token_wi.word_id)
+        self.assertEqual(805306868, token_wi.word_id_packed)
+        self.assertEqual(target_surface, token_wi.surface)
+
+        direct_wi = dict.word_info(300000500)
+        self.assertEqual(3, direct_wi.lex_id)
+        self.assertEqual(500, direct_wi.word_id_relative)
+        self.assertEqual(300000500, direct_wi.word_id)
+        self.assertEqual(805306868, direct_wi.word_id_packed)
+        self.assertEqual(target_surface, direct_wi.surface)
 
 
 if __name__ == '__main__':
