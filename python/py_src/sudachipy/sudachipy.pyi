@@ -177,9 +177,8 @@ class Dictionary:
         """
         Return word info by word id.
 
-        Accepts both:
-        - packed Sudachi word id (dictionary id in high 4 bits and row id in low 28 bits)
-        - legacy id format (`lex_id * 10**8 + relative_word_id`)
+        Expects a cross-lex id format (`lex_id * 10**8 + relative_word_id`).
+        Packed Sudachi word ids are internal.
         """
         ...
 

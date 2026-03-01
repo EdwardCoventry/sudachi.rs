@@ -31,7 +31,7 @@ use crate::morpheme::PyMorphemeListWrapper;
 use crate::projection::PyProjector;
 use crate::word_info::{LEX_ID_OOV, WORD_ID_OOV};
 
-const LEGACY_LEX_STRIDE: i32 = 100_000_000;
+const CROSS_LEX_ID_STRIDE: i32 = 100_000_000;
 
 fn strip_forced_split_whitespace(text: &str) -> (String, Vec<usize>) {
     let mut segments = Vec::new();
@@ -363,17 +363,17 @@ impl PyTokenizer {
                 } else {
                     token.word_id.word() as i32
                 };
-                let legacy_word_id = if lex_id <= 0 {
+                let cross_lex_word_id = if lex_id <= 0 {
                     relative_word_id
                 } else {
-                    lex_id * LEGACY_LEX_STRIDE + relative_word_id
+                    lex_id * CROSS_LEX_ID_STRIDE + relative_word_id
                 };
 
                 tok.set_item("surface", token.surface)?;
                 tok.set_item("reading_form", token.reading_form)?;
                 tok.set_item("begin", token.begin)?;
                 tok.set_item("end", token.end)?;
-                tok.set_item("word_id", legacy_word_id)?;
+                tok.set_item("word_id", cross_lex_word_id)?;
                 tok.set_item("word_id_relative", relative_word_id)?;
                 tok.set_item("word_id_packed", packed_word_id)?;
                 tok.set_item("lex_id", lex_id)?;

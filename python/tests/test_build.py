@@ -173,7 +173,7 @@ class MyTestCase(unittest.TestCase):
         comp = tok.tokenize("東京府")
         self.assertEqual(comp[0].lex_id(), 1)
         comp_wi = dict.word_info(comp[0].word_id())
-        self.assertEqual(comp_wi.a_unit_split, [5, 2**28 + 1])
+        self.assertEqual(comp_wi.a_unit_split, [5, 100000001])
         split_wi = dict.word_info(comp_wi.a_unit_split[1])
         self.assertEqual(split_wi.word_id, 100000001)
         self.assertEqual(split_wi.word_id_packed, 2**28 + 1)

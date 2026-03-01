@@ -47,7 +47,7 @@ use crate::projection::{pyprojection, PyProjector};
 use crate::tokenizer::{PySplitMode, PyTokenizer};
 use crate::word_info::{is_non_inflected_pos, PyWordInfo};
 
-const LEGACY_LEX_STRIDE: u32 = 100_000_000;
+const CROSS_LEX_ID_STRIDE: u32 = 100_000_000;
 
 pub(crate) struct PyDicData {
     pub(crate) dictionary: JapaneseDictionary,
@@ -438,8 +438,8 @@ impl PyDictionary {
 
     /// Return word info by word id.
     ///
-    /// Supports both packed Sudachi ids (dictionary id in high 4 bits and
-    /// row id in low 28 bits) and legacy ids (lex_id * 10**8 + row id).
+    /// Expects a cross-lex id (lex_id * 10**8 + row id). Packed native Sudachi
+    /// ids are internal and are rejected at this boundary.
     #[pyo3(text_signature = "(self, /, word_id: int) -> WordInfo")]
     fn word_info(&self, word_id: u32) -> PyResult<PyWordInfo> {
         let max_dict_id = self.config.user_dicts.len() + 1;
@@ -569,18 +569,21 @@ fn unpack_word_id(raw: u32, max_dict_id: usize) -> PyResult<WordId> {
     let word_id = WordId::from_raw(raw);
     let dict_id = word_id.dic() as usize;
 
-    // Packed id with explicit dictionary component.
     if !word_id.is_oov() && dict_id > 0 && dict_id < max_dict_id {
-        return Ok(word_id);
+        let cross_lex_word_id = dict_id as u32 * CROSS_LEX_ID_STRIDE + word_id.word();
+        return errors::wrap(Err(format!(
+            "packed native Sudachi word ids are internal; use cross-lex id {} instead of {}",
+            cross_lex_word_id, raw
+        )));
     }
 
-    // Legacy id format: lex_id * 10**8 + relative_word_id.
-    if dict_id == 0 && raw >= LEGACY_LEX_STRIDE {
-        let legacy_lex_id = (raw / LEGACY_LEX_STRIDE) as usize;
-        let legacy_word_id = raw % LEGACY_LEX_STRIDE;
+    // Cross-lex id format: lex_id * 10**8 + relative_word_id.
+    if dict_id == 0 && raw >= CROSS_LEX_ID_STRIDE {
+        let cross_lex_id = (raw / CROSS_LEX_ID_STRIDE) as usize;
+        let cross_lex_word_id = raw % CROSS_LEX_ID_STRIDE;
 
-        if legacy_lex_id > 0 && legacy_lex_id < max_dict_id {
-            return errors::wrap(WordId::checked(legacy_lex_id as u8, legacy_word_id));
+        if cross_lex_id > 0 && cross_lex_id < max_dict_id {
+            return errors::wrap(WordId::checked(cross_lex_id as u8, cross_lex_word_id));
         }
     }
 

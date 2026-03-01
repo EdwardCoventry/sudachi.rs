@@ -11,6 +11,7 @@ For upstream baseline Python usage/docs, see:
 Fork-specific Python additions are documented in the root README, including:
 
 - Extended `WordInfo` ID fields (`word_id`, `word_id_packed`, `word_id_relative`, `lex_id`, dictionary-form lex fields)
+- `Dictionary.word_info(...)` now takes cross-lex ids only; packed ids remain internal
 - Dictionary-form runtime semantics:
   - non-inflected tokens expose dictionary-form IDs as `-1`
   - inflected `-1` dictionary-form ids resolve to self IDs

@@ -68,7 +68,7 @@ class TestDictionary(unittest.TestCase):
         self.assertEqual(1, wi.lex_id)
         self.assertEqual(ms[0].lex_id(), wi.lex_id)
         self.assertEqual("東京府", wi.surface)
-        self.assertEqual([5, 2**28 + 1], wi.a_unit_split)
+        self.assertEqual([5, 100000001], wi.a_unit_split)
 
         split_info = self.dict_.word_info(wi.a_unit_split[1])
         self.assertEqual(100000001, split_info.word_id)
@@ -82,8 +82,9 @@ class TestDictionary(unittest.TestCase):
         with self.assertRaises(SudachiError):
             self.dict_.word_info(15 << 28)
 
-        with self.assertRaises(SudachiError):
-            self.dict_.word_info(2 << 28)
+        ms = self.dict_.lookup("東京府")
+        with self.assertRaisesRegex(SudachiError, "packed native Sudachi word ids are internal"):
+            self.dict_.word_info(ms[0].get_word_info().word_id_packed)
 
     def test_word_info_by_id_out_of_range(self):
         sizes = self.dict_.dictionary_sizes()

@@ -6,6 +6,11 @@ Also check [rust changelog](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `Dictionary.word_info(...)` now accepts cross-lex ids only at the public API boundary; packed ids remain internal
+- `WordInfo` split arrays normalize unambiguous packed user-lex ids to cross-lex ids
+
 ## [0.6.10](https://github.com/WorksApplications/sudachi.rs/releases/tag/v0.6.10) (2025-01-10)
 
 - Add support for py3.13t (free thread) (#293, #295)

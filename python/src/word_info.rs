@@ -20,7 +20,7 @@ use sudachi::dic::grammar::Grammar;
 use sudachi::dic::lexicon::word_infos::{WordInfo, WordInfoData};
 use sudachi::dic::word_id::WordId;
 
-const LEGACY_LEX_STRIDE: i32 = 100_000_000;
+const CROSS_LEX_ID_STRIDE: i32 = 100_000_000;
 const NATIVE_LEX_SHIFT: u32 = 28;
 const NATIVE_WORD_MASK: u32 = 0x0fff_ffff;
 const NATIVE_OOV_DIC_ID: i32 = 0xf;
@@ -61,11 +61,11 @@ fn copy_if_empty(v1: String, v2: &String) -> String {
     }
 }
 
-fn pack_legacy_word_id(lex_id: i32, relative_word_id: i32) -> i32 {
+fn pack_cross_lex_word_id(lex_id: i32, relative_word_id: i32) -> i32 {
     if lex_id <= 0 {
         relative_word_id
     } else {
-        lex_id * LEGACY_LEX_STRIDE + relative_word_id
+        lex_id * CROSS_LEX_ID_STRIDE + relative_word_id
     }
 }
 
@@ -142,15 +142,15 @@ fn decode_dictionary_form_word_id(
 
     if raw >= (1 << NATIVE_LEX_SHIFT) && native_lex_id > 0 {
         let relative = native_word_id;
-        let legacy = pack_legacy_word_id(native_lex_id, relative);
+        let cross_lex = pack_cross_lex_word_id(native_lex_id, relative);
         let packed = raw_dictionary_form_word_id;
-        (native_lex_id, legacy, packed, relative, false)
-    } else if raw_dictionary_form_word_id >= LEGACY_LEX_STRIDE {
-        let legacy_lex_id = raw_dictionary_form_word_id / LEGACY_LEX_STRIDE;
-        let relative = raw_dictionary_form_word_id % LEGACY_LEX_STRIDE;
-        if legacy_lex_id > 0 {
+        (native_lex_id, cross_lex, packed, relative, false)
+    } else if raw_dictionary_form_word_id >= CROSS_LEX_ID_STRIDE {
+        let cross_lex_id = raw_dictionary_form_word_id / CROSS_LEX_ID_STRIDE;
+        let relative = raw_dictionary_form_word_id % CROSS_LEX_ID_STRIDE;
+        if cross_lex_id > 0 {
             return (
-                legacy_lex_id,
+                cross_lex_id,
                 raw_dictionary_form_word_id,
                 raw_dictionary_form_word_id,
                 relative,
@@ -159,10 +159,10 @@ fn decode_dictionary_form_word_id(
         }
         // fall through to default-local behavior for malformed values
         let relative = raw_dictionary_form_word_id;
-        let legacy = pack_legacy_word_id(default_lex_id, relative);
+        let cross_lex = pack_cross_lex_word_id(default_lex_id, relative);
         (
             default_lex_id,
-            legacy,
+            cross_lex,
             raw_dictionary_form_word_id,
             relative,
             false,
@@ -170,15 +170,43 @@ fn decode_dictionary_form_word_id(
     } else {
         // Non-packed dictionary-form ids are relative to the current lexicon.
         let relative = raw_dictionary_form_word_id;
-        let legacy = pack_legacy_word_id(default_lex_id, relative);
+        let cross_lex = pack_cross_lex_word_id(default_lex_id, relative);
         (
             default_lex_id,
-            legacy,
+            cross_lex,
             raw_dictionary_form_word_id,
             relative,
             false,
         )
     }
+}
+
+fn normalise_word_reference(raw_word_id: i32, _default_lex_id: i32) -> i32 {
+    if raw_word_id < 0 {
+        return raw_word_id;
+    }
+
+    let raw = raw_word_id as u32;
+    let (native_lex_id, native_word_id) = unpack_native_word_id(raw);
+    if raw >= (1 << NATIVE_LEX_SHIFT) && native_lex_id > 0 {
+        return pack_cross_lex_word_id(native_lex_id, native_word_id);
+    }
+
+    if raw_word_id >= CROSS_LEX_ID_STRIDE {
+        let cross_lex_id = raw_word_id / CROSS_LEX_ID_STRIDE;
+        if cross_lex_id > 0 {
+            return raw_word_id;
+        }
+    }
+
+    raw_word_id
+}
+
+fn normalise_split_ids(raw_split_ids: Vec<u32>, default_lex_id: i32) -> Vec<u32> {
+    raw_split_ids
+        .into_iter()
+        .map(|raw| normalise_word_reference(clamp_u32_to_i32(raw), default_lex_id) as u32)
+        .collect()
 }
 
 pub(crate) fn is_non_inflected_pos(grammar: &Grammar<'_>, pos_id: u16) -> bool {
@@ -198,13 +226,13 @@ impl PyWordInfo {
         is_non_inflected: bool,
     ) -> Self {
         let word_info: WordInfoData = word_info.into();
-        let (lex_id, legacy_word_id, packed_word_id, relative_word_id) = if word_id.is_oov() {
+        let (lex_id, cross_lex_word_id, packed_word_id, relative_word_id) = if word_id.is_oov() {
             (LEX_ID_OOV, WORD_ID_OOV, word_id.as_raw(), WORD_ID_OOV)
         } else {
             let lex_id = word_id.dic() as i32;
             let relative_word_id = word_id.word() as i32;
-            let legacy_word_id = pack_legacy_word_id(lex_id, relative_word_id);
-            (lex_id, legacy_word_id, word_id.as_raw(), relative_word_id)
+            let cross_lex_word_id = pack_cross_lex_word_id(lex_id, relative_word_id);
+            (lex_id, cross_lex_word_id, word_id.as_raw(), relative_word_id)
         };
         let (
             dictionary_form_lex_id,
@@ -215,17 +243,20 @@ impl PyWordInfo {
         ) = decode_dictionary_form_word_id(
             word_info.dictionary_form_word_id,
             lex_id,
-            legacy_word_id,
+            cross_lex_word_id,
             packed_word_id,
             relative_word_id,
             is_non_inflected,
         );
         let is_inflected = !is_non_inflected;
         let is_dictionary_form = dictionary_form_missing
-            || (dictionary_form_word_id == legacy_word_id && dictionary_form_lex_id == lex_id);
+            || (dictionary_form_word_id == cross_lex_word_id && dictionary_form_lex_id == lex_id);
+        let a_unit_split_raw: Vec<u32> = unsafe { std::mem::transmute(word_info.a_unit_split) };
+        let b_unit_split_raw: Vec<u32> = unsafe { std::mem::transmute(word_info.b_unit_split) };
+        let word_structure_raw: Vec<u32> = unsafe { std::mem::transmute(word_info.word_structure) };
 
         Self {
-            word_id: legacy_word_id,
+            word_id: cross_lex_word_id,
             word_id_packed: packed_word_id,
             word_id_relative: relative_word_id,
             lex_id,
@@ -241,10 +272,9 @@ impl PyWordInfo {
             dictionary_form: copy_if_empty(word_info.dictionary_form, &word_info.surface),
             reading_form: copy_if_empty(word_info.reading_form, &word_info.surface),
             surface: word_info.surface,
-            // WordId is repr(transparent) with a single u32 field so transmute is safe
-            a_unit_split: unsafe { std::mem::transmute(word_info.a_unit_split) },
-            b_unit_split: unsafe { std::mem::transmute(word_info.b_unit_split) },
-            word_structure: unsafe { std::mem::transmute(word_info.word_structure) },
+            a_unit_split: normalise_split_ids(a_unit_split_raw, lex_id),
+            b_unit_split: normalise_split_ids(b_unit_split_raw, lex_id),
+            word_structure: normalise_split_ids(word_structure_raw, lex_id),
             synonym_group_ids: word_info.synonym_group_ids,
         }
     }

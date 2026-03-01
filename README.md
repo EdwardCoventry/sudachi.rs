@@ -27,6 +27,13 @@ For general Sudachi installation, CLI usage, and baseline Python API docs, see u
 - `word_id_relative`: ID relative to the current lexicon
 - `lex_id`: source lexicon id for the token
 
+Public boundary rule:
+
+- `Dictionary.word_info(...)` expects `word_id` / cross-lex ids only
+- packed native Sudachi ids are internal and are rejected at that API boundary
+- split arrays in `WordInfo` strip packed user-lex ids to cross-lex ids when they are unambiguous
+- small relative split ids remain relative because they are lex-context-dependent, not packed
+
 Dictionary-form metadata:
 
 - `dictionary_form_word_id`

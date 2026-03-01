@@ -214,7 +214,7 @@ class TestTokenizer(unittest.TestCase):
         self.assertEqual(wi.b_unit_split, [])
 
         wi = self.tokenizer_obj.tokenize('東京府')[0].get_word_info()
-        self.assertEqual(wi.a_unit_split, [5, 2**28 + 1])
+        self.assertEqual(wi.a_unit_split, [5, 100000001])
         self.assertEqual(wi.b_unit_split, [])
 
     def test_wordinfo_word_structure(self):
@@ -222,7 +222,7 @@ class TestTokenizer(unittest.TestCase):
         self.assertEqual(wi.word_structure, [])
 
         wi = self.tokenizer_obj.tokenize('東京府')[0].get_word_info()
-        self.assertEqual(wi.word_structure, [5, 2**28 + 1])
+        self.assertEqual(wi.word_structure, [5, 100000001])
 
     def test_wordinfo_synonym_group_ids(self):
         wi = self.tokenizer_obj.tokenize('東京')[0].get_word_info()

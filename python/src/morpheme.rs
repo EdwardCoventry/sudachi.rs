@@ -31,7 +31,7 @@ use crate::projection::{MorphemeProjection, PyProjector};
 use crate::word_info::{is_non_inflected_pos, PyWordInfo, LEX_ID_OOV, WORD_ID_OOV};
 
 pub(crate) type PyMorphemeList = MorphemeList<Arc<PyDicData>>;
-const LEGACY_LEX_STRIDE: i32 = 100_000_000;
+const CROSS_LEX_ID_STRIDE: i32 = 100_000_000;
 
 /// A list of morphemes.
 ///
@@ -438,7 +438,7 @@ impl PyMorpheme {
     /// Returns legacy-style word id of this word in the dictionary.
     ///
     /// System dictionary ids are relative row ids.
-    /// User dictionary ids are encoded as lex_id * 10**8 + relative row id.
+    /// Returns the cross-lex id form: lex_id * 10**8 + relative row id.
     #[pyo3(text_signature = "(self, /) -> int")]
     fn word_id(&self, py: Python) -> i32 {
         let word_id = self.morph(py).word_id();
@@ -450,7 +450,7 @@ impl PyMorpheme {
         if lex_id <= 0 {
             relative_word_id
         } else {
-            lex_id * LEGACY_LEX_STRIDE + relative_word_id
+            lex_id * CROSS_LEX_ID_STRIDE + relative_word_id
         }
     }
 
