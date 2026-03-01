@@ -82,10 +82,6 @@ class TestDictionary(unittest.TestCase):
         with self.assertRaises(SudachiError):
             self.dict_.word_info(15 << 28)
 
-        ms = self.dict_.lookup("東京府")
-        with self.assertRaisesRegex(SudachiError, "packed native Sudachi word ids are internal"):
-            self.dict_.word_info(ms[0].get_word_info().word_id_packed)
-
     def test_word_info_by_id_out_of_range(self):
         sizes = self.dict_.dictionary_sizes()
         with self.assertRaises(SudachiError):

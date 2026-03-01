@@ -30,7 +30,7 @@ For general Sudachi installation, CLI usage, and baseline Python API docs, see u
 Public boundary rule:
 
 - `Dictionary.word_info(...)` expects `word_id` / cross-lex ids only
-- packed native Sudachi ids are internal and are rejected at that API boundary
+- packed native Sudachi ids are internal and not part of the public API contract
 - split arrays in `WordInfo` strip packed user-lex ids to cross-lex ids when they are unambiguous
 - small relative split ids remain relative because they are lex-context-dependent, not packed
 

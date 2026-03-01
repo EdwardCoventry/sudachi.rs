@@ -250,6 +250,42 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(wi.dictionary_form_word_id_packed, -1)
         self.assertEqual(wi.dictionary_form_lex_id, -1)
 
+    def test_word_info_accepts_cross_lex_zero_relative_ids_for_higher_lexes(self):
+        sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
+        self.tempfiles.append(sys_dic)
+        sudachipy.sudachipy.build_system_dic(
+            matrix=RESOURCES_PATH / "matrix.def",
+            lex=[RESOURCES_PATH / "lex.csv"],
+            output=sys_dic
+        )
+
+        user_dics = []
+        for idx, surface in enumerate(("第一語", "第二語", "第三語"), start=1):
+            user_csv = Path(self.tmpdir) / f"user_{idx}.csv"
+            user_csv.write_text(
+                f"{surface},6,6,1000,{surface},名詞,普通名詞,一般,*,*,*,{surface},{surface},*,A,*,*,*,*\n",
+                encoding="utf-8",
+            )
+            self.tempfiles.append(str(user_csv))
+
+            user_dic = tempfile.mktemp(prefix=f"sudachi_u{idx}", suffix=".dic", dir=self.tmpdir)
+            self.tempfiles.append(user_dic)
+            sudachipy.sudachipy.build_user_dic(
+                system=sys_dic,
+                lex=[user_csv],
+                output=user_dic
+            )
+            user_dics.append(user_dic)
+
+        cfg = replace(CFG_TEMPLATE, system=sys_dic, user=user_dics)
+        dict = sudachipy.Dictionary(config=cfg)
+
+        wi = dict.word_info(300000000)
+        self.assertEqual(3, wi.lex_id)
+        self.assertEqual(300000000, wi.word_id)
+        self.assertEqual(0, wi.word_id_relative)
+        self.assertEqual("第三語", wi.surface)
+
 
 if __name__ == '__main__':
     unittest.main()

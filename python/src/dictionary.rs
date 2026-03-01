@@ -438,14 +438,13 @@ impl PyDictionary {
 
     /// Return word info by word id.
     ///
-    /// Expects a cross-lex id (lex_id * 10**8 + row id). Packed native Sudachi
-    /// ids are internal and are rejected at this boundary.
+    /// Expects a cross-lex id (lex_id * 10**8 + row id).
+    /// Packed native Sudachi ids are internal and not part of the public API contract.
     #[pyo3(text_signature = "(self, /, word_id: int) -> WordInfo")]
     fn word_info(&self, word_id: u32) -> PyResult<PyWordInfo> {
-        let max_dict_id = self.config.user_dicts.len() + 1;
-        let word_id = unpack_word_id(word_id, max_dict_id)?;
         let dic = self.dictionary.as_ref().unwrap();
         let lexicon = dic.dictionary.lexicon();
+        let word_id = unpack_word_id(word_id, lexicon)?;
         let dict_id = word_id.dic() as usize;
         let lexicon_size = lexicon
             .lexicon_size(dict_id)
@@ -565,27 +564,26 @@ fn build_storage_from_config(
     Ok(storage)
 }
 
-fn unpack_word_id(raw: u32, max_dict_id: usize) -> PyResult<WordId> {
-    let word_id = WordId::from_raw(raw);
-    let dict_id = word_id.dic() as usize;
-
-    if !word_id.is_oov() && dict_id > 0 && dict_id < max_dict_id {
-        let cross_lex_word_id = dict_id as u32 * CROSS_LEX_ID_STRIDE + word_id.word();
-        return errors::wrap(Err(format!(
-            "packed native Sudachi word ids are internal; use cross-lex id {} instead of {}",
-            cross_lex_word_id, raw
-        )));
-    }
+fn unpack_word_id(raw: u32, lexicon: &LexiconSet<'_>) -> PyResult<WordId> {
+    let max_dict_id = lexicon.num_lexicons();
 
     // Cross-lex id format: lex_id * 10**8 + relative_word_id.
-    if dict_id == 0 && raw >= CROSS_LEX_ID_STRIDE {
+    // Prefer cross-lex decoding only when it resolves to an existing lexicon row.
+    if raw >= CROSS_LEX_ID_STRIDE {
         let cross_lex_id = (raw / CROSS_LEX_ID_STRIDE) as usize;
         let cross_lex_word_id = raw % CROSS_LEX_ID_STRIDE;
 
         if cross_lex_id > 0 && cross_lex_id < max_dict_id {
-            return errors::wrap(WordId::checked(cross_lex_id as u8, cross_lex_word_id));
+            if let Some(lexicon_size) = lexicon.lexicon_size(cross_lex_id) {
+                if cross_lex_word_id < lexicon_size {
+                    return errors::wrap(WordId::checked(cross_lex_id as u8, cross_lex_word_id));
+                }
+            }
         }
     }
+
+    let word_id = WordId::from_raw(raw);
+    let dict_id = word_id.dic() as usize;
 
     if word_id.is_oov() {
         return errors::wrap(Err(format!(
