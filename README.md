@@ -45,6 +45,7 @@ Dictionary-form metadata:
 - `is_inflected`
 
 This lets callers determine source lexicon and dictionary-form source lexicon without app-side inference.
+For real lexicon entries, `dictionary_form_word_id_packed` is the canonical native packed ID, while `dictionary_form_word_id` remains cross-lex.
 
 Current runtime semantics for lex ids:
 

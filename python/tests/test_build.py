@@ -215,7 +215,7 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(wi.dictionary_form, "テスト名詞")
         self.assertEqual(wi.dictionary_form_word_id, 100000000)
         self.assertEqual(wi.dictionary_form_word_id_relative, 0)
-        self.assertEqual(wi.dictionary_form_word_id_packed, 0)
+        self.assertEqual(wi.dictionary_form_word_id_packed, 2**28)
         self.assertEqual(wi.dictionary_form_lex_id, 1)
 
     def test_user_dictionary_form_reference_legacy_cross_lex_id(self):

@@ -69,6 +69,11 @@ fn pack_cross_lex_word_id(lex_id: i32, relative_word_id: i32) -> i32 {
     }
 }
 
+fn pack_native_word_id_bits(lex_id: i32, relative_word_id: i32) -> i32 {
+    let raw = ((lex_id as u32) << NATIVE_LEX_SHIFT) | ((relative_word_id as u32) & NATIVE_WORD_MASK);
+    raw as i32
+}
+
 fn unpack_native_word_id(raw_word_id: u32) -> (i32, i32) {
     let lex_id = ((raw_word_id >> NATIVE_LEX_SHIFT) & 0xf) as i32;
     let word_id = (raw_word_id & NATIVE_WORD_MASK) as i32;
@@ -143,7 +148,7 @@ fn decode_dictionary_form_word_id(
     if raw >= (1 << NATIVE_LEX_SHIFT) && native_lex_id > 0 {
         let relative = native_word_id;
         let cross_lex = pack_cross_lex_word_id(native_lex_id, relative);
-        let packed = raw_dictionary_form_word_id;
+        let packed = pack_native_word_id_bits(native_lex_id, relative);
         (native_lex_id, cross_lex, packed, relative, false)
     } else if raw_dictionary_form_word_id >= CROSS_LEX_ID_STRIDE {
         let cross_lex_id = raw_dictionary_form_word_id / CROSS_LEX_ID_STRIDE;
@@ -152,7 +157,7 @@ fn decode_dictionary_form_word_id(
             return (
                 cross_lex_id,
                 raw_dictionary_form_word_id,
-                raw_dictionary_form_word_id,
+                pack_native_word_id_bits(cross_lex_id, relative),
                 relative,
                 false,
             );
@@ -163,7 +168,7 @@ fn decode_dictionary_form_word_id(
         (
             default_lex_id,
             cross_lex,
-            raw_dictionary_form_word_id,
+            pack_native_word_id_bits(default_lex_id, relative),
             relative,
             false,
         )
@@ -174,7 +179,7 @@ fn decode_dictionary_form_word_id(
         (
             default_lex_id,
             cross_lex,
-            raw_dictionary_form_word_id,
+            pack_native_word_id_bits(default_lex_id, relative),
             relative,
             false,
         )
