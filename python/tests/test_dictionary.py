@@ -79,13 +79,17 @@ class TestDictionary(unittest.TestCase):
         self.assertEqual("府", split_info.surface)
 
     def test_word_info_by_id_invalid(self):
-        with self.assertRaises(SudachiError):
+        with self.assertRaisesRegex(SudachiError, "missing lex id 40"):
             self.dict_.word_info(15 << 28)
 
     def test_word_info_by_id_out_of_range(self):
         sizes = self.dict_.dictionary_sizes()
         with self.assertRaises(SudachiError):
             self.dict_.word_info(sizes[0])
+
+    def test_word_info_by_id_cross_lex_row_out_of_range(self):
+        with self.assertRaisesRegex(SudachiError, "out of range for lex 1"):
+            self.dict_.word_info(100000999)
 
     def test_dictionary_sizes(self):
         sizes = self.dict_.dictionary_sizes()

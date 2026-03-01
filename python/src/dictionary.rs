@@ -568,18 +568,33 @@ fn unpack_word_id(raw: u32, lexicon: &LexiconSet<'_>) -> PyResult<WordId> {
     let max_dict_id = lexicon.num_lexicons();
 
     // Cross-lex id format: lex_id * 10**8 + relative_word_id.
-    // Prefer cross-lex decoding only when it resolves to an existing lexicon row.
     if raw >= CROSS_LEX_ID_STRIDE {
         let cross_lex_id = (raw / CROSS_LEX_ID_STRIDE) as usize;
         let cross_lex_word_id = raw % CROSS_LEX_ID_STRIDE;
 
-        if cross_lex_id > 0 && cross_lex_id < max_dict_id {
-            if let Some(lexicon_size) = lexicon.lexicon_size(cross_lex_id) {
-                if cross_lex_word_id < lexicon_size {
-                    return errors::wrap(WordId::checked(cross_lex_id as u8, cross_lex_word_id));
-                }
-            }
+        if cross_lex_id == 0 || cross_lex_id >= max_dict_id {
+            return errors::wrap(Err(format!(
+                "cross-lex word id {} references missing lex id {}; this dictionary has lex ids 0..{}",
+                raw,
+                cross_lex_id,
+                max_dict_id.saturating_sub(1)
+            )));
         }
+
+        let lexicon_size = lexicon
+            .lexicon_size(cross_lex_id)
+            .expect("validated dictionary id should always exist");
+        if cross_lex_word_id >= lexicon_size {
+            return errors::wrap(Err(format!(
+                "cross-lex word id {} has relative row {} out of range for lex {} (size={})",
+                raw,
+                cross_lex_word_id,
+                cross_lex_id,
+                lexicon_size
+            )));
+        }
+
+        return errors::wrap(WordId::checked(cross_lex_id as u8, cross_lex_word_id));
     }
 
     let word_id = WordId::from_raw(raw);

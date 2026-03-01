@@ -31,6 +31,7 @@ Public boundary rule:
 
 - `Dictionary.word_info(...)` expects `word_id` / cross-lex ids only
 - packed native Sudachi ids are internal and not part of the public API contract
+- any `>= 10^8` value is treated as a cross-lex id only; invalid lex ids or rows raise errors
 - split arrays in `WordInfo` strip packed user-lex ids to cross-lex ids when they are unambiguous
 - small relative split ids remain relative because they are lex-context-dependent, not packed
 
