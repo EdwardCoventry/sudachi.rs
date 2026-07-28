@@ -77,6 +77,78 @@ class TestReadingCandidates(unittest.TestCase):
         self.assertEqual(1, len(limited))
         self.assertEqual(["東京都"], [t["surface"] for t in limited[0]["tokens"]])
 
+    def test_best_effort_localizes_gifu_contextual_reading(self):
+        candidates = self.default_tokenizer_obj.tokenize_reading_candidates(
+            "僕はお義父さんのために",
+            "ボクハオトウサンノタメニ",
+            mismatch_policy="silent",
+        )
+
+        self.assertEqual(1, len(candidates))
+        candidate = candidates[0]
+        self.assertFalse(candidate["is_exact"])
+        self.assertEqual(1, candidate["mismatch_count"])
+        mismatches = [token for token in candidate["tokens"] if not token["reading_matches"]]
+        self.assertEqual(
+            [("義父", "ギフ", "トウ")],
+            [
+                (token["surface"], token["reading_form"], token["supplied_reading"])
+                for token in mismatches
+            ],
+        )
+
+    def test_best_effort_localizes_naota_kanji_fragment(self):
+        candidates = self.default_tokenizer_obj.tokenize_reading_candidates(
+            "太",
+            "タ",
+            mismatch_policy="silent",
+        )
+
+        self.assertEqual(1, len(candidates))
+        token = candidates[0]["tokens"][0]
+        self.assertEqual(("太", "フトシ", "タ", False), (
+            token["surface"],
+            token["reading_form"],
+            token["supplied_reading"],
+            token["reading_matches"],
+        ))
+
+    def test_best_effort_mismatch_policy_warns_or_errors(self):
+        with self.assertWarns(RuntimeWarning):
+            warned = self.default_tokenizer_obj.tokenize_reading_candidates(
+                "太", "タ", mismatch_policy="warn"
+            )
+        self.assertEqual(1, len(warned))
+
+        with self.assertRaisesRegex(ValueError, "太/フトシ/タ"):
+            self.default_tokenizer_obj.tokenize_reading_candidates(
+                "太", "タ", mismatch_policy="error"
+            )
+
+    def test_best_effort_oov_policy_converts_only_mismatched_tokens(self):
+        candidate = self.default_tokenizer_obj.tokenize_reading_candidates(
+            "僕はお義父さんのために",
+            "ボクハオトウサンノタメニ",
+            mismatch_policy="oov",
+        )[0]
+
+        mismatch = next(token for token in candidate["tokens"] if not token["reading_matches"])
+        self.assertEqual("義父", mismatch["surface"])
+        self.assertEqual("トウ", mismatch["reading_form"])
+        self.assertEqual("ギフ", mismatch["dictionary_reading_form"])
+        self.assertEqual("トウ", mismatch["supplied_reading"])
+        self.assertTrue(mismatch["coerced_to_oov"])
+        self.assertTrue(mismatch["is_oov"])
+        self.assertEqual(-2, mismatch["lex_id"])
+        self.assertEqual(-2, mismatch["word_id"])
+        self.assertIsNone(mismatch["word_id_packed"])
+        self.assertGreaterEqual(mismatch["source_lex_id"], 0)
+        self.assertGreaterEqual(mismatch["source_word_id"], 0)
+
+        exact_tokens = [token for token in candidate["tokens"] if token["reading_matches"]]
+        self.assertTrue(exact_tokens)
+        self.assertTrue(all(not token["coerced_to_oov"] for token in exact_tokens))
+
     def test_case_width_and_symbol_variants(self):
         for reading in ("A/B", "a/b", "aキゴウb", "ａ／ｂ"):
             with self.subTest(reading=reading):

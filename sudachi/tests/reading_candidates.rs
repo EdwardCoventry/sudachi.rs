@@ -17,8 +17,8 @@
 mod common;
 
 use common::TestStatefulTokenizer as TestTokenizer;
-use sudachi::analysis::Mode;
 use sudachi::analysis::reading_candidates::ReadingCandidatePath;
+use sudachi::analysis::Mode;
 
 fn surfaces(path: &[sudachi::analysis::reading_candidates::ReadingCandidateToken]) -> Vec<String> {
     path.iter().map(|t| t.surface.clone()).collect()
@@ -96,6 +96,26 @@ fn reading_candidates_no_match_and_limit() {
         .reading_candidates("トウキョウト", 1)
         .expect("limited");
     assert_eq!(1, limited.len());
+}
+
+#[test]
+fn reading_candidates_best_effort_marks_ordinary_path_mismatches() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    tok.tok.reset().push_str("東京都");
+    tok.tok.do_tokenize().expect("tokenize");
+
+    let candidates = tok
+        .tok
+        .reading_candidates_best_effort("トウキョウフ", 16, 1)
+        .expect("best effort");
+
+    assert_eq!(1, candidates.len());
+    assert!(!candidates[0].is_exact);
+    assert_eq!(1, candidates[0].mismatch_count);
+    assert_eq!(vec!["東京都".to_owned()], surfaces(&candidates[0].tokens));
+    assert_eq!("トウキョウト", candidates[0].tokens[0].reading_form);
+    assert_eq!("トウキョウフ", candidates[0].tokens[0].supplied_reading);
+    assert!(!candidates[0].tokens[0].reading_matches);
 }
 
 #[test]

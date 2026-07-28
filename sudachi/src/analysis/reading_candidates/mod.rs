@@ -16,7 +16,7 @@
 
 use crate::analysis::inner::Node;
 use crate::analysis::lattice::Lattice;
-use crate::analysis::node::{LatticeNode, RightId};
+use crate::analysis::node::{LatticeNode, PathCost, ResultNode, RightId};
 use crate::dic::connect::ConnectionMatrix;
 use crate::dic::lexicon::word_infos::{WordInfo, WordInfoData};
 use crate::dic::lexicon_set::LexiconSet;
@@ -34,6 +34,8 @@ pub struct ReadingCandidateToken {
     pub word_id: WordId,
     pub surface: String,
     pub reading_form: String,
+    pub supplied_reading: String,
+    pub reading_matches: bool,
     pub begin: usize,
     pub end: usize,
 }
@@ -41,6 +43,8 @@ pub struct ReadingCandidateToken {
 #[derive(Clone, Debug)]
 pub struct ReadingCandidatePath {
     pub total_cost: i32,
+    pub is_exact: bool,
+    pub mismatch_count: usize,
     pub tokens: Vec<ReadingCandidateToken>,
 }
 
@@ -55,6 +59,13 @@ struct SearchState {
     boundary: usize,
     prev_right_id: u16,
     reading_offset: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct PathStep {
+    node_ref: NodeRef,
+    reading_begin: usize,
+    reading_end: usize,
 }
 
 #[derive(Clone)]
@@ -74,11 +85,14 @@ impl NodeMeta {
         }
     }
 
-    fn as_candidate_token(&self) -> ReadingCandidateToken {
+    fn as_candidate_token(&self, supplied_reading: &str) -> ReadingCandidateToken {
+        let reading_form = self.reading_for_output().to_owned();
         ReadingCandidateToken {
             word_id: self.node.word_id(),
             surface: self.word_info.surface().to_owned(),
-            reading_form: self.reading_for_output().to_owned(),
+            supplied_reading: supplied_reading.to_owned(),
+            reading_form,
+            reading_matches: true,
             begin: self.node.begin(),
             end: self.node.end(),
         }
@@ -151,12 +165,13 @@ fn make_word_info(
 struct Searcher<'a> {
     conn: &'a ConnectionMatrix<'a>,
     reading: &'a [u8],
+    reading_text: &'a str,
     end_boundary: usize,
     max_results: usize,
     min_tokens: usize,
     nodes_by_begin: &'a [Vec<NodeRef>],
     metas_by_end: &'a [Vec<NodeMeta>],
-    path: Vec<NodeRef>,
+    path: Vec<PathStep>,
     results: Vec<ReadingCandidatePath>,
     min_cost_cache: HashMap<SearchState, Option<i32>>,
 }
@@ -174,6 +189,7 @@ impl<'a> Searcher<'a> {
         Self {
             conn,
             reading: reading.as_bytes(),
+            reading_text: reading,
             end_boundary,
             max_results,
             min_tokens,
@@ -209,11 +225,18 @@ impl<'a> Searcher<'a> {
 
     fn record_result(&mut self, total_cost: i32) {
         let mut tokens = Vec::with_capacity(self.path.len());
-        for node_ref in &self.path {
-            let meta = &self.metas_by_end[node_ref.end][node_ref.index];
-            tokens.push(meta.as_candidate_token());
+        for step in &self.path {
+            let meta = &self.metas_by_end[step.node_ref.end][step.node_ref.index];
+            tokens.push(
+                meta.as_candidate_token(&self.reading_text[step.reading_begin..step.reading_end]),
+            );
         }
-        let candidate = ReadingCandidatePath { total_cost, tokens };
+        let candidate = ReadingCandidatePath {
+            total_cost,
+            is_exact: true,
+            mismatch_count: 0,
+            tokens,
+        };
         if self.results.len() < self.max_results {
             self.results.push(candidate);
             return;
@@ -350,11 +373,217 @@ impl<'a> Searcher<'a> {
                     continue;
                 }
             }
-            self.path.push(node_ref);
+            self.path.push(PathStep {
+                node_ref,
+                reading_begin: state.reading_offset,
+                reading_end: next_state.reading_offset,
+            });
             self.dfs(next_state, base_cost + step_cost);
             self.path.pop();
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct AlignmentScore {
+    mismatched_reading_chars: usize,
+    mismatch_count: usize,
+    mismatched_surface_chars: usize,
+    reading_length_delta: usize,
+}
+
+impl AlignmentScore {
+    fn key(self) -> (usize, usize, usize, usize) {
+        (
+            self.mismatched_reading_chars,
+            self.mismatch_count,
+            self.mismatched_surface_chars,
+            self.reading_length_delta,
+        )
+    }
+
+    fn with_mismatch(self, surface: &str, dictionary_reading: &str, supplied: &str) -> Self {
+        let dictionary_len = dictionary_reading.chars().count();
+        let supplied_len = supplied.chars().count();
+        Self {
+            mismatched_reading_chars: self.mismatched_reading_chars + supplied_len,
+            mismatch_count: self.mismatch_count + 1,
+            mismatched_surface_chars: self.mismatched_surface_chars + surface.chars().count(),
+            reading_length_delta: self.reading_length_delta + dictionary_len.abs_diff(supplied_len),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AlignmentStep {
+    token_index: usize,
+    reading_begin: usize,
+    reading_end: usize,
+    reading_matches: bool,
+}
+
+#[derive(Clone, Debug)]
+struct TopPathAlignment {
+    score: AlignmentScore,
+    steps: Vec<AlignmentStep>,
+}
+
+fn reading_boundaries(reading: &str) -> Vec<usize> {
+    let mut result = reading
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .collect::<Vec<_>>();
+    result.push(reading.len());
+    result
+}
+
+fn align_top_path_from(
+    tokens: &[ResultNode],
+    reading: &str,
+    boundaries: &[usize],
+    token_index: usize,
+    reading_offset: usize,
+    memo: &mut HashMap<(usize, usize), Option<TopPathAlignment>>,
+) -> Option<TopPathAlignment> {
+    if let Some(cached) = memo.get(&(token_index, reading_offset)) {
+        return cached.clone();
+    }
+
+    let result = if token_index == tokens.len() {
+        (reading_offset == reading.len()).then(|| TopPathAlignment {
+            score: AlignmentScore::default(),
+            steps: Vec::new(),
+        })
+    } else {
+        let token = &tokens[token_index];
+        let word_info = token.word_info();
+        let surface = word_info.surface();
+        let dictionary_reading = if word_info.reading_form().is_empty() {
+            surface
+        } else {
+            word_info.reading_form()
+        };
+        let variants = build_match_variants(word_info);
+        let mut best: Option<TopPathAlignment> = None;
+
+        for variant in &variants {
+            let end = reading_offset + variant.len();
+            if end > reading.len()
+                || !reading.is_char_boundary(end)
+                || !reading[reading_offset..].starts_with(variant)
+            {
+                continue;
+            }
+            if let Some(mut suffix) =
+                align_top_path_from(tokens, reading, boundaries, token_index + 1, end, memo)
+            {
+                suffix.steps.insert(
+                    0,
+                    AlignmentStep {
+                        token_index,
+                        reading_begin: reading_offset,
+                        reading_end: end,
+                        reading_matches: true,
+                    },
+                );
+                if best
+                    .as_ref()
+                    .is_none_or(|current| suffix.score.key() < current.score.key())
+                {
+                    best = Some(suffix);
+                }
+            }
+        }
+
+        for &end in boundaries
+            .iter()
+            .filter(|&&offset| offset >= reading_offset)
+        {
+            if let Some(mut suffix) =
+                align_top_path_from(tokens, reading, boundaries, token_index + 1, end, memo)
+            {
+                let supplied = &reading[reading_offset..end];
+                suffix.score = suffix
+                    .score
+                    .with_mismatch(surface, dictionary_reading, supplied);
+                suffix.steps.insert(
+                    0,
+                    AlignmentStep {
+                        token_index,
+                        reading_begin: reading_offset,
+                        reading_end: end,
+                        reading_matches: false,
+                    },
+                );
+                if best
+                    .as_ref()
+                    .is_none_or(|current| suffix.score.key() < current.score.key())
+                {
+                    best = Some(suffix);
+                }
+            }
+        }
+
+        best
+    };
+
+    memo.insert((token_index, reading_offset), result.clone());
+    result
+}
+
+/// Align a supplied reading to Sudachi's ordinary winning path.
+///
+/// Exact reading candidates should be attempted first. This fallback keeps the
+/// ordinary token identities and makes every dictionary/supplied-reading
+/// disagreement explicit on the returned token.
+pub fn align_top_path_with_reading(
+    top_path: &[ResultNode],
+    reading: &str,
+    min_tokens: usize,
+) -> Option<ReadingCandidatePath> {
+    if top_path.len() < min_tokens.max(1) {
+        return None;
+    }
+    let normalized_reading = normalize_for_matching(reading);
+    if normalized_reading.is_empty() {
+        return None;
+    }
+
+    let boundaries = reading_boundaries(&normalized_reading);
+    let mut memo = HashMap::new();
+    let alignment =
+        align_top_path_from(top_path, &normalized_reading, &boundaries, 0, 0, &mut memo)?;
+
+    let tokens = alignment
+        .steps
+        .into_iter()
+        .map(|step| {
+            let token = &top_path[step.token_index];
+            let word_info = token.word_info();
+            let reading_form = if word_info.reading_form().is_empty() {
+                word_info.surface().to_owned()
+            } else {
+                word_info.reading_form().to_owned()
+            };
+            ReadingCandidateToken {
+                word_id: token.word_id(),
+                surface: word_info.surface().to_owned(),
+                reading_form,
+                supplied_reading: normalized_reading[step.reading_begin..step.reading_end]
+                    .to_owned(),
+                reading_matches: step.reading_matches,
+                begin: token.begin(),
+                end: token.end(),
+            }
+        })
+        .collect();
+
+    Some(ReadingCandidatePath {
+        total_cost: top_path.last().map_or(0, PathCost::total_cost),
+        is_exact: alignment.score.mismatch_count == 0,
+        mismatch_count: alignment.score.mismatch_count,
+        tokens,
+    })
 }
 
 pub fn enumerate_reading_candidates(

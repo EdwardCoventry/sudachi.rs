@@ -18,7 +18,9 @@ use crate::analysis::created::CreatedWords;
 use crate::analysis::inner::{Node, NodeIdx};
 use crate::analysis::lattice::Lattice;
 use crate::analysis::node::{LatticeNode, ResultNode};
-use crate::analysis::reading_candidates::{enumerate_reading_candidates, ReadingCandidatePath};
+use crate::analysis::reading_candidates::{
+    align_top_path_with_reading, enumerate_reading_candidates, ReadingCandidatePath,
+};
 use crate::analysis::stateless_tokenizer::{dump_path, split_path, DictionaryAccess};
 use crate::analysis::Mode;
 use crate::dic::category_type::CategoryType;
@@ -394,6 +396,26 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
             max_results,
             min_tokens,
         )
+    }
+
+    /// Return exact reading candidates, or align the supplied reading to the
+    /// ordinary winning path when no complete exact path exists.
+    pub fn reading_candidates_best_effort(
+        &self,
+        reading: &str,
+        max_results: usize,
+        min_tokens: usize,
+    ) -> SudachiResult<Vec<ReadingCandidatePath>> {
+        let exact = self.reading_candidates_with_min_tokens(reading, max_results, min_tokens)?;
+        if !exact.is_empty() || max_results == 0 {
+            return Ok(exact);
+        }
+
+        let fallback = self
+            .top_path
+            .as_deref()
+            .and_then(|path| align_top_path_with_reading(path, reading, min_tokens));
+        Ok(fallback.into_iter().collect())
     }
 }
 

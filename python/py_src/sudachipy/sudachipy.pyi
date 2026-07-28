@@ -430,15 +430,21 @@ class Tokenizer:
         reading: str,
         max_results: int = 64,
         min_tokens: int = 1,
+        mismatch_policy: str = "reject",
     ) -> List[dict]:
         """
-        Enumerate tokenization candidates whose concatenated reading_form exactly matches `reading`.
+        Enumerate tokenization candidates constrained by `reading`.
 
         Returns candidates sorted by total path cost in ascending order.
         Each candidate is a dict with:
         - ``total_cost``: int
         - ``tokens``: list[dict] with surface/reading and word-id fields
         - ``min_tokens`` allows excluding single-token candidates (e.g. set to 2)
+        - ``mismatch_policy`` is ``reject`` (exact only), ``silent``, ``warn``, ``error``, or ``oov``
+        Best-effort tokens retain ``reading_form`` and include the separately supplied
+        ``supplied_reading`` plus a boolean ``reading_matches`` field.
+        The ``oov`` policy gives mismatched tokens OOV ids and the supplied reading while
+        preserving the selected dictionary token in ``dictionary_reading_form`` and ``source_*``.
         """
         ...
 

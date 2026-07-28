@@ -14,10 +14,12 @@
  *  limitations under the License.
  */
 
+use std::ffi::CString;
 use std::ops::DerefMut;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use pyo3::exceptions::{PyRuntimeWarning, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -315,15 +317,21 @@ impl PyTokenizer {
         self.tokenizer.set_global_whitespace_bridge(enabled)
     }
 
-    /// Enumerate tokenization candidates constrained by exact reading.
+    /// Enumerate tokenization candidates constrained by reading.
     ///
     /// Returns a list sorted by total path cost in ascending order.
     /// Each element is a dict with:
     /// - total_cost: int
     /// - tokens: list[dict] containing surface/reading and word-id fields.
+    /// `mismatch_policy` controls behavior when no complete exact path exists:
+    /// - reject: preserve exact-only behavior and return an empty list;
+    /// - silent: return the ordinary path with explicit mismatch metadata;
+    /// - warn: return that path and emit RuntimeWarning;
+    /// - error: raise ValueError instead of returning that path.
+    /// - oov: return mismatched tokens as OOV using the supplied reading.
     #[pyo3(
-        signature = (text, reading, max_results=64, min_tokens=1),
-        text_signature = "(self, /, text: str, reading: str, max_results=64, min_tokens=1) -> list[dict]",
+        signature = (text, reading, max_results=64, min_tokens=1, mismatch_policy="reject"),
+        text_signature = "(self, /, text: str, reading: str, max_results=64, min_tokens=1, mismatch_policy='reject') -> list[dict]",
     )]
     fn tokenize_reading_candidates<'py>(
         &'py mut self,
@@ -332,51 +340,131 @@ impl PyTokenizer {
         reading: &'py str,
         max_results: usize,
         min_tokens: usize,
+        mismatch_policy: &str,
     ) -> PyResult<Bound<'py, PyList>> {
         let min_tokens = min_tokens.max(1);
+        let best_effort = match mismatch_policy {
+            "reject" => false,
+            "silent" | "warn" | "error" | "oov" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown mismatch_policy {other:?}; expected 'reject', 'silent', 'warn', 'error', or 'oov'"
+                )))
+            }
+        };
         let candidates = errors::wrap_ctx(
             py.detach(|| {
                 self.tokenizer.reset().push_str(text);
                 self.tokenizer.do_tokenize()?;
-                self.tokenizer
-                    .reading_candidates_with_min_tokens(reading, max_results, min_tokens)
+                if best_effort {
+                    self.tokenizer
+                        .reading_candidates_best_effort(reading, max_results, min_tokens)
+                } else {
+                    self.tokenizer.reading_candidates_with_min_tokens(
+                        reading,
+                        max_results,
+                        min_tokens,
+                    )
+                }
             }),
             "Error during reading candidate tokenization",
         )?;
+
+        if let Some(candidate) = candidates.first().filter(|candidate| !candidate.is_exact) {
+            let mismatches = candidate
+                .tokens
+                .iter()
+                .filter(|token| !token.reading_matches)
+                .map(|token| {
+                    format!(
+                        "{}/{}/{}",
+                        token.surface, token.reading_form, token.supplied_reading
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let message = format!(
+                "Sudachi used best-effort reading alignment with {} mismatch(es): {}",
+                candidate.mismatch_count, mismatches
+            );
+            match mismatch_policy {
+                "warn" => {
+                    let warning = CString::new(message).map_err(|_| {
+                        PyValueError::new_err("reading mismatch warning contained a null byte")
+                    })?;
+                    PyErr::warn(
+                        py,
+                        &py.get_type::<PyRuntimeWarning>(),
+                        warning.as_c_str(),
+                        1,
+                    )?;
+                }
+                "error" => return Err(PyValueError::new_err(message)),
+                _ => {}
+            }
+        }
 
         let out = PyList::empty(py);
         for cand in candidates {
             let cand_obj = PyDict::new(py);
             cand_obj.set_item("total_cost", cand.total_cost)?;
+            cand_obj.set_item("is_exact", cand.is_exact)?;
+            cand_obj.set_item("mismatch_count", cand.mismatch_count)?;
 
             let tokens = PyList::empty(py);
             for token in cand.tokens {
                 let tok = PyDict::new(py);
-                let packed_word_id = token.word_id.as_raw();
-                let lex_id = if token.word_id.is_oov() {
+                let source_packed_word_id = token.word_id.as_raw();
+                let source_lex_id = if token.word_id.is_oov() {
                     LEX_ID_OOV
                 } else {
                     token.word_id.dic() as i32
                 };
-                let relative_word_id = if token.word_id.is_oov() {
+                let source_relative_word_id = if token.word_id.is_oov() {
                     WORD_ID_OOV
                 } else {
                     token.word_id.word() as i32
                 };
-                let cross_lex_word_id = if lex_id <= 0 {
-                    relative_word_id
+                let source_cross_lex_word_id = if source_lex_id <= 0 {
+                    source_relative_word_id
                 } else {
-                    lex_id * CROSS_LEX_ID_STRIDE + relative_word_id
+                    source_lex_id * CROSS_LEX_ID_STRIDE + source_relative_word_id
+                };
+                let coerced_to_oov = mismatch_policy == "oov" && !token.reading_matches;
+                let is_oov = token.word_id.is_oov() || coerced_to_oov;
+                let (lex_id, relative_word_id, cross_lex_word_id) = if is_oov {
+                    (LEX_ID_OOV, WORD_ID_OOV, WORD_ID_OOV)
+                } else {
+                    (
+                        source_lex_id,
+                        source_relative_word_id,
+                        source_cross_lex_word_id,
+                    )
+                };
+                let packed_word_id = (!coerced_to_oov).then_some(source_packed_word_id);
+                let output_reading = if coerced_to_oov {
+                    token.supplied_reading.clone()
+                } else {
+                    token.reading_form.clone()
                 };
 
                 tok.set_item("surface", token.surface)?;
-                tok.set_item("reading_form", token.reading_form)?;
+                tok.set_item("reading_form", output_reading)?;
+                tok.set_item("dictionary_reading_form", token.reading_form)?;
+                tok.set_item("supplied_reading", token.supplied_reading)?;
+                tok.set_item("reading_matches", token.reading_matches)?;
+                tok.set_item("coerced_to_oov", coerced_to_oov)?;
+                tok.set_item("is_oov", is_oov)?;
                 tok.set_item("begin", token.begin)?;
                 tok.set_item("end", token.end)?;
                 tok.set_item("word_id", cross_lex_word_id)?;
                 tok.set_item("word_id_relative", relative_word_id)?;
                 tok.set_item("word_id_packed", packed_word_id)?;
                 tok.set_item("lex_id", lex_id)?;
+                tok.set_item("source_word_id", source_cross_lex_word_id)?;
+                tok.set_item("source_word_id_relative", source_relative_word_id)?;
+                tok.set_item("source_word_id_packed", source_packed_word_id)?;
+                tok.set_item("source_lex_id", source_lex_id)?;
                 tokens.append(tok)?;
             }
 
