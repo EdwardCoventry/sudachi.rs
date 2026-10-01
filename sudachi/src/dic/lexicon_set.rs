@@ -120,6 +120,12 @@ impl LexiconSet<'_> {
             .get_word_info(id.word(), subset)?
             .into();
 
+        let df = WordId::from_raw(word_info.dictionary_form_word_id as u32);
+        if df != WordId::INVALID && df.dic() == 15 {
+            let base = self.lexicons[0].get_word_info(df.word(), InfoSubset::SURFACE)?;
+            word_info.dictionary_form = base.surface().to_owned();
+        }
+
         if subset.contains(InfoSubset::POS_ID) {
             let pos_id = word_info.pos_id as usize;
             if dict_id > 0 && pos_id >= self.num_system_pos {

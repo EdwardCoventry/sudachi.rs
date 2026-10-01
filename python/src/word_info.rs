@@ -145,6 +145,10 @@ fn decode_dictionary_form_word_id(
     let raw = raw_dictionary_form_word_id as u32;
     let (native_lex_id, native_word_id) = unpack_native_word_id(raw);
 
+    if raw >> NATIVE_LEX_SHIFT == 15 {
+        // Explicit S-prefixed dictionary-form reference, tagged by the builder.
+        return (0, native_word_id, native_word_id, native_word_id, false);
+    }
     if raw >= (1 << NATIVE_LEX_SHIFT) && native_lex_id > 0 {
         let relative = native_word_id;
         let cross_lex = pack_cross_lex_word_id(native_lex_id, relative);

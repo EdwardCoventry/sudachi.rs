@@ -429,7 +429,12 @@ impl LexiconReader {
             }
 
             if e.dic_form != WordId::INVALID {
-                ctx.transform(Self::validate_wid(e.dic_form, max_0, max_1, "dic_form"))?;
+                let reference = if e.dic_form.dic() == 15 {
+                    WordId::new(0, e.dic_form.word())
+                } else {
+                    e.dic_form
+                };
+                ctx.transform(Self::validate_wid(reference, max_0, max_1, "dic_form"))?;
             }
 
             for s in e.splits_a.iter() {

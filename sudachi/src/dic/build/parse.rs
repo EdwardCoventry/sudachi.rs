@@ -88,7 +88,16 @@ pub(crate) fn parse_u32(data: &str) -> DicWriteResult<u32> {
 
 #[inline]
 pub(crate) fn parse_dic_form(data: &str) -> DicWriteResult<WordId> {
-    if data == "*" || data == "-1" {
+    if let Some(system) = data.strip_prefix('S') {
+        let id = parse_wordid_raw(system)?;
+        // Dictionary-form-only tag: dic 15 is reserved, never a real lexicon.
+        // It distinguishes explicit system ownership from legacy local IDs.
+        let tagged = WordId::new(15, id.word());
+        if tagged == WordId::INVALID {
+            return Err(BuildFailure::InvalidWordId(data.to_owned()));
+        }
+        Ok(tagged)
+    } else if data == "*" || data == "-1" {
         Ok(WordId::INVALID)
     } else {
         parse_wordid(data)
@@ -275,6 +284,13 @@ mod test {
         // max character
         claim::assert_matches!(unescape("\\u{110000}"), Err(_));
         claim::assert_matches!(unescape("\\u{FFFFFF}"), Err(_));
+    }
+
+    #[test]
+    fn parse_dic_form_explicit_system() {
+        assert_eq!(parse_dic_form("S42").unwrap(), WordId::new(15, 42));
+        assert!(parse_dic_form("S-1").is_err());
+        assert!(parse_wordid("S42").is_err());
     }
 
     #[test]

@@ -62,6 +62,34 @@ class MyTestCase(unittest.TestCase):
         result = tok.tokenize("東京にいく")
         self.assertEqual(result.size(), 3)
 
+    def test_explicit_system_dictionary_form_owner(self):
+        import csv
+        sys_dic = str(Path(self.tmpdir) / "system.dic")
+        user_dic = str(Path(self.tmpdir) / "user.dic")
+        csv_path = Path(self.tmpdir) / "explicit.csv"
+        self.tempfiles.extend([sys_dic, user_dic, str(csv_path)])
+        sudachipy.sudachipy.build_system_dic(
+            matrix=RESOURCES_PATH / "matrix.def",
+            lex=[RESOURCES_PATH / "lex.csv"], output=sys_dic)
+        rows = list(csv.reader((RESOURCES_PATH / "lex.csv").open()))
+        base_id = next(i for i, row in enumerate(rows) if row[0] == "行く")
+        row = next(row for row in rows if row[0] == "行っ").copy()
+        row[0] = row[4] = "試っ"
+        row[13] = f"S{base_id}"
+        with csv_path.open("w", newline="") as handle:
+            csv.writer(handle).writerow(row)
+        sudachipy.sudachipy.build_user_dic(system=sys_dic, lex=[csv_path], output=user_dic)
+        dictionary = sudachipy.Dictionary(config=replace(CFG_TEMPLATE, system=sys_dic, user=[user_dic]))
+        info = dictionary.word_info(100_000_000)  # first row of synthetic user lex 1
+        self.assertEqual(info.dictionary_form_lex_id, 0)
+        self.assertEqual(info.dictionary_form_word_id, base_id)
+        self.assertEqual(info.dictionary_form, "行く")
+        row[13] = "S999999"
+        with csv_path.open("w", newline="") as handle:
+            csv.writer(handle).writerow(row)
+        with self.assertRaises(Exception):
+            sudachipy.sudachipy.build_user_dic(system=sys_dic, lex=[csv_path], output=user_dic)
+
     def test_build_user1(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
         self.tempfiles.append(sys_dic)
