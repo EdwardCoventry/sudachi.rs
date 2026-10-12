@@ -246,7 +246,7 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(wi.dictionary_form_word_id_packed, 2**28)
         self.assertEqual(wi.dictionary_form_lex_id, 1)
 
-    def test_user_dictionary_form_reference_legacy_cross_lex_id(self):
+    def test_user_dictionary_form_rejects_ambiguous_cross_lex_id(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)
         self.tempfiles.append(sys_dic)
         sudachipy.sudachipy.build_system_dic(
@@ -264,19 +264,12 @@ class MyTestCase(unittest.TestCase):
 
         u1_dic = tempfile.mktemp(prefix="sudachi_u1", suffix=".dic", dir=self.tmpdir)
         self.tempfiles.append(u1_dic)
-        sudachipy.sudachipy.build_user_dic(
-            system=sys_dic,
-            lex=[user_csv],
-            output=u1_dic
-        )
-
-        cfg = replace(CFG_TEMPLATE, system=sys_dic, user=[u1_dic])
-        tok = sudachipy.Dictionary(config=cfg).create()
-        wi = tok.tokenize("テスト語")[0].get_word_info()
-        self.assertEqual(wi.dictionary_form_word_id, -1)
-        self.assertEqual(wi.dictionary_form_word_id_relative, -1)
-        self.assertEqual(wi.dictionary_form_word_id_packed, -1)
-        self.assertEqual(wi.dictionary_form_lex_id, -1)
+        with self.assertRaises(sudachipy.errors.SudachiError):
+            sudachipy.sudachipy.build_user_dic(
+                system=sys_dic,
+                lex=[user_csv],
+                output=u1_dic
+            )
 
     def test_user_dictionary_form_reference_minus_one(self):
         sys_dic = tempfile.mktemp(prefix="sudachi_sy", suffix=".dic", dir=self.tmpdir)

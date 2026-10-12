@@ -6,6 +6,7 @@ from .sudachipy import (
     Morpheme,
     WordInfo,
     PosMatcher,
+    parse_furigana,
 )
 from .config import Config
 from . import errors

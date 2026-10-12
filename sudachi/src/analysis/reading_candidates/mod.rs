@@ -22,14 +22,14 @@ use crate::dic::lexicon::word_infos::{WordInfo, WordInfoData};
 use crate::dic::lexicon_set::LexiconSet;
 use crate::dic::subset::InfoSubset;
 use crate::dic::word_id::WordId;
-use crate::error::SudachiResult;
+use crate::error::{SudachiError, SudachiResult};
 use crate::input_text::InputBuffer;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use unicode_normalization::UnicodeNormalization;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadingCandidateToken {
     pub word_id: WordId,
     pub surface: String,
@@ -42,10 +42,29 @@ pub struct ReadingCandidateToken {
 
 #[derive(Clone, Debug)]
 pub struct ReadingCandidatePath {
-    pub total_cost: i32,
+    pub total_cost: i64,
     pub is_exact: bool,
     pub mismatch_count: usize,
     pub tokens: Vec<ReadingCandidateToken>,
+}
+
+/// One of the attested native identities required at an original-input span.
+/// Groups represent genuine native origins of one derived Kiku target.
+#[derive(Clone, Debug)]
+pub struct MatchedToken {
+    pub begin: usize,
+    pub end: usize,
+    pub word_ids: Vec<WordId>,
+}
+
+impl MatchedToken {
+    fn permits(&self, begin: usize, end: usize, word_id: WordId) -> bool {
+        if begin == end {
+            return begin < self.begin || begin >= self.end;
+        }
+        end <= self.begin || begin >= self.end
+            || (begin == self.begin && end == self.end && self.word_ids.contains(&word_id))
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -163,6 +182,7 @@ fn make_word_info(
 }
 
 struct Searcher<'a> {
+    require_reading: bool,
     conn: &'a ConnectionMatrix<'a>,
     reading: &'a [u8],
     reading_text: &'a str,
@@ -170,13 +190,24 @@ struct Searcher<'a> {
     max_results: usize,
     min_tokens: usize,
     nodes_by_begin: &'a [Vec<NodeRef>],
+    space_edges: &'a [Option<(usize, String)>],
     metas_by_end: &'a [Vec<NodeMeta>],
     path: Vec<PathStep>,
     results: Vec<ReadingCandidatePath>,
-    min_cost_cache: HashMap<SearchState, Option<i32>>,
+    min_cost_cache: HashMap<SearchState, Option<i64>>,
 }
 
 impl<'a> Searcher<'a> {
+    fn skip_space(&self, mut state: SearchState) -> Option<SearchState> {
+        let (end, text) = self.space_edges.get(state.boundary)?.as_ref()?;
+        // Readings may retain actual source spaces or omit them.
+        if self.require_reading && self.reading[state.reading_offset..].starts_with(text.as_bytes()) {
+            state.reading_offset += text.len();
+        }
+        state.boundary = *end;
+        Some(state)
+    }
+
     fn new(
         conn: &'a ConnectionMatrix<'a>,
         reading: &'a str,
@@ -184,9 +215,12 @@ impl<'a> Searcher<'a> {
         max_results: usize,
         min_tokens: usize,
         nodes_by_begin: &'a [Vec<NodeRef>],
+        space_edges: &'a [Option<(usize, String)>],
         metas_by_end: &'a [Vec<NodeMeta>],
+        require_reading: bool,
     ) -> Self {
         Self {
+            require_reading,
             conn,
             reading: reading.as_bytes(),
             reading_text: reading,
@@ -194,6 +228,7 @@ impl<'a> Searcher<'a> {
             max_results,
             min_tokens,
             nodes_by_begin,
+            space_edges,
             metas_by_end,
             path: Vec::new(),
             results: Vec::new(),
@@ -208,14 +243,14 @@ impl<'a> Searcher<'a> {
             reading_offset: 0,
         };
         self.dfs(start, 0);
-        self.results.sort_by(|a, b| a.total_cost.cmp(&b.total_cost));
+        self.results.sort_by(compare_paths);
         if self.results.len() > self.max_results {
             self.results.truncate(self.max_results);
         }
         self.results
     }
 
-    fn worst_kept_cost(&self) -> Option<i32> {
+    fn worst_kept_cost(&self) -> Option<i64> {
         if self.results.len() < self.max_results {
             None
         } else {
@@ -223,7 +258,7 @@ impl<'a> Searcher<'a> {
         }
     }
 
-    fn record_result(&mut self, total_cost: i32) {
+    fn record_result(&mut self, total_cost: i64) {
         let mut tokens = Vec::with_capacity(self.path.len());
         for step in &self.path {
             let meta = &self.metas_by_end[step.node_ref.end][step.node_ref.index];
@@ -237,6 +272,11 @@ impl<'a> Searcher<'a> {
             mismatch_count: 0,
             tokens,
         };
+        // Latent pronunciation states must not consume distinct public result slots.
+        if let Some(existing) = self.results.iter_mut().find(|p| p.tokens == candidate.tokens) {
+            if candidate.total_cost < existing.total_cost { *existing = candidate; }
+            return;
+        }
         if self.results.len() < self.max_results {
             self.results.push(candidate);
             return;
@@ -246,36 +286,40 @@ impl<'a> Searcher<'a> {
             .results
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.total_cost.cmp(&b.1.total_cost))
+            .max_by(|a, b| compare_paths(a.1, b.1))
         {
-            if total_cost < current_worst.total_cost {
+            if compare_paths(&candidate, current_worst).is_lt() {
                 self.results[idx] = candidate;
             }
         }
     }
 
-    fn min_additional_cost_from_state(&mut self, state: SearchState) -> Option<i32> {
+    fn min_additional_cost_from_state(&mut self, state: SearchState) -> Option<i64> {
         if let Some(cached) = self.min_cost_cache.get(&state) {
             return *cached;
         }
 
-        let result = if state.boundary == self.end_boundary {
+        let result = if let Some(next) = self.skip_space(state) {
+            self.min_additional_cost_from_state(next)
+        } else if state.boundary == self.end_boundary {
             if state.reading_offset == self.reading.len() {
-                Some(self.conn.cost(state.prev_right_id, 0) as i32)
+                Some(
+                    self.conn
+                        .transition(state.prev_right_id, 0),
+                )
             } else {
                 None
             }
         } else {
             let node_refs = self.nodes_by_begin[state.boundary].clone();
-            let mut best: Option<i32> = None;
+            let mut best: Option<i64> = None;
 
             for node_ref in node_refs {
                 let meta = &self.metas_by_end[node_ref.end][node_ref.index];
-                let step_cost = self.conn.cost(state.prev_right_id, meta.node.left_id()) as i32
-                    + meta.node.cost() as i32;
+                let step_cost = self.conn.transition(state.prev_right_id, meta.node.left_id()) + self.conn.node_cost(&meta.node);
                 for token_reading in &meta.match_variants {
                     let token_reading = token_reading.as_bytes();
-                    if token_reading.is_empty() {
+                    if token_reading.is_empty() && self.require_reading {
                         continue;
                     }
                     if state.reading_offset + token_reading.len() > self.reading.len() {
@@ -306,7 +350,11 @@ impl<'a> Searcher<'a> {
         result
     }
 
-    fn dfs(&mut self, state: SearchState, base_cost: i32) {
+    fn dfs(&mut self, state: SearchState, base_cost: i64) {
+        if let Some(next) = self.skip_space(state) {
+            self.dfs(next, base_cost);
+            return;
+        }
         let Some(min_additional) = self.min_additional_cost_from_state(state) else {
             return;
         };
@@ -324,21 +372,23 @@ impl<'a> Searcher<'a> {
             if self.path.len() < self.min_tokens {
                 return;
             }
-            let total_cost = base_cost + self.conn.cost(state.prev_right_id, 0) as i32;
+            let total_cost = base_cost
+                + self
+                    .conn
+                    .transition(state.prev_right_id, 0);
             self.record_result(total_cost);
             return;
         }
 
         let node_refs = self.nodes_by_begin[state.boundary].clone();
-        let mut transitions: Vec<(i32, i32, NodeRef, SearchState)> = Vec::new();
+        let mut transitions: Vec<(i64, i64, NodeRef, SearchState)> = Vec::new();
 
         for node_ref in node_refs {
             let meta = &self.metas_by_end[node_ref.end][node_ref.index];
-            let step_cost = self.conn.cost(state.prev_right_id, meta.node.left_id()) as i32
-                + meta.node.cost() as i32;
+            let step_cost = self.conn.transition(state.prev_right_id, meta.node.left_id()) + self.conn.node_cost(&meta.node);
             for token_reading in &meta.match_variants {
                 let token_reading = token_reading.as_bytes();
-                if token_reading.is_empty() {
+                if token_reading.is_empty() && self.require_reading {
                     continue;
                 }
                 if state.reading_offset + token_reading.len() > self.reading.len() {
@@ -382,6 +432,10 @@ impl<'a> Searcher<'a> {
             self.path.pop();
         }
     }
+}
+
+fn compare_paths(a: &ReadingCandidatePath, b: &ReadingCandidatePath) -> Ordering {
+    a.total_cost.cmp(&b.total_cost)
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -595,14 +649,66 @@ pub fn enumerate_reading_candidates(
     reading: &str,
     max_results: usize,
     min_tokens: usize,
+    matched_tokens: &[MatchedToken],
 ) -> SudachiResult<Vec<ReadingCandidatePath>> {
+    enumerate_candidates(lattice, input, lexicon, conn, subset, reading, max_results, min_tokens, matched_tokens, true, true)
+}
+
+/// Native-cost paths with hard identity constraints and explicit advisory readings.
+/// Used when a complete exact reading search cannot satisfy the supplied hints.
+pub fn enumerate_advisory_candidates(
+    lattice: &Lattice, input: &InputBuffer, lexicon: &LexiconSet,
+    conn: &ConnectionMatrix, subset: InfoSubset, reading: &str,
+    max_results: usize, min_tokens: usize, matched_tokens: &[MatchedToken],
+) -> SudachiResult<Vec<ReadingCandidatePath>> {
+    enumerate_candidates(lattice, input, lexicon, conn, subset, reading, max_results, min_tokens, matched_tokens, false, true)
+}
+
+/// Unhinted native paths with exact identity/span constraints before ranking.
+pub fn enumerate_native_candidates(
+    lattice: &Lattice, input: &InputBuffer, lexicon: &LexiconSet,
+    conn: &ConnectionMatrix, subset: InfoSubset,
+    max_results: usize, min_tokens: usize, matched_tokens: &[MatchedToken],
+) -> SudachiResult<Vec<ReadingCandidatePath>> {
+    enumerate_candidates(lattice,input,lexicon,conn,subset,"",max_results,min_tokens,matched_tokens,false,false)
+}
+
+fn enumerate_candidates(
+    lattice: &Lattice, input: &InputBuffer, lexicon: &LexiconSet,
+    conn: &ConnectionMatrix, subset: InfoSubset, reading: &str,
+    max_results: usize, min_tokens: usize, matched_tokens: &[MatchedToken],
+    require_reading: bool, align_reading: bool,
+) -> SudachiResult<Vec<ReadingCandidatePath>> {
+    let text_len = input.original().chars().count();
+    for (index, token) in matched_tokens.iter().enumerate() {
+        if token.begin >= token.end || token.end > text_len {
+            return Err(SudachiError::InvalidMatchedToken(format!(
+                "span {}..{} is outside text of length {}", token.begin, token.end, text_len
+            )));
+        }
+        if matched_tokens[..index].iter().any(|other|
+            token.begin < other.end && token.end > other.begin) {
+            return Err(SudachiError::InvalidMatchedToken("spans overlap".into()));
+        }
+        if token.word_ids.is_empty() {
+            return Err(SudachiError::InvalidMatchedToken("required identity group is empty".into()));
+        }
+        for word in &token.word_ids {
+            if word.is_oov() || lexicon.lexicon_size(word.dic() as usize)
+                .is_none_or(|size| word.word() >= size) {
+                return Err(SudachiError::InvalidMatchedToken(format!(
+                    "{} is not an existing dictionary word", word
+                )));
+            }
+        }
+    }
     if max_results == 0 {
         return Ok(Vec::new());
     }
     let min_tokens = min_tokens.max(1);
 
     let normalized_reading = normalize_for_matching(reading);
-    if normalized_reading.is_empty() {
+    if (require_reading || align_reading) && normalized_reading.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -613,7 +719,13 @@ pub fn enumerate_reading_candidates(
 
     let end_boundary = boundary_count - 1;
     let mut nodes_by_begin = vec![Vec::new(); boundary_count];
+    let space_edges: Vec<_> = (0..boundary_count).map(|begin| {
+        lattice.skipped_space_end(begin).map(|end| {
+            (end, normalize_for_matching(input.curr_slice_c(begin..end)))
+        })
+    }).collect();
     let mut metas_by_end: Vec<Vec<NodeMeta>> = Vec::with_capacity(boundary_count);
+    let mut found = vec![false; matched_tokens.len()];
 
     let read_subset = (subset | InfoSubset::READING_FORM | InfoSubset::SURFACE).normalize();
 
@@ -621,6 +733,16 @@ pub fn enumerate_reading_candidates(
         let nodes = lattice.nodes_ending_at(end);
         let mut metas = Vec::with_capacity(nodes.len());
         for node in nodes {
+            let orig_begin = input.to_orig_char_idx(node.begin());
+            let orig_end = input.to_orig_char_idx(node.end());
+            if !matched_tokens.iter().all(|token| token.permits(orig_begin, orig_end, node.word_id())) {
+                continue;
+            }
+            for (index, token) in matched_tokens.iter().enumerate() {
+                if (orig_begin, orig_end) == (token.begin, token.end) && token.word_ids.contains(&node.word_id()) {
+                    found[index] = true;
+                }
+            }
             let word_info = make_word_info(node, input, lexicon, read_subset)?;
             let meta = NodeMeta {
                 node: node.clone(),
@@ -636,15 +758,68 @@ pub fn enumerate_reading_candidates(
         metas_by_end.push(metas);
     }
 
+    if found.iter().any(|present| !present) {
+        return Ok(Vec::new());
+    }
+
+    let search_reading = if require_reading { &normalized_reading } else { "" };
+    if !require_reading {
+        for metas in &mut metas_by_end {
+            for meta in metas { meta.match_variants = vec![String::new()]; }
+        }
+    }
     let results = Searcher::new(
         conn,
-        &normalized_reading,
+        search_reading,
         end_boundary,
         max_results,
         min_tokens,
         &nodes_by_begin,
+        &space_edges,
         &metas_by_end,
+        require_reading,
     )
     .run();
-    Ok(results)
+    if require_reading || !align_reading { return Ok(results); }
+    Ok(results.into_iter().filter_map(|candidate| {
+        let nodes: Vec<_> = candidate.tokens.iter().map(|token| {
+            let meta = metas_by_end[token.end].iter().find(|meta|
+                meta.node.begin() == token.begin && meta.node.word_id() == token.word_id)
+                .expect("candidate node exists in the filtered native lattice");
+            ResultNode::new(meta.node.clone(), candidate.total_cost,
+                input.to_curr_byte_idx(token.begin) as u16, input.to_curr_byte_idx(token.end) as u16,
+                meta.word_info.clone())
+        }).collect();
+        align_top_path_with_reading(&nodes, reading, min_tokens)
+    }).collect())
+}
+
+#[cfg(test)]
+mod selected_space_tests {
+    use super::*;
+
+    #[test]
+    fn reading_search_keeps_original_spans_across_selected_model_space_edges() {
+        let raw=vec![0u8;8];
+        let conn=ConnectionMatrix::from_offset_size(&raw,0,2,2).unwrap();
+        let word_info: WordInfo=WordInfoData { surface:"青い".into(), reading_form:"アオイ".into(),
+            ..Default::default() }.into();
+        let node=Node::new(2,4,1,1,17,WordId::checked(0,1).unwrap());
+        let mut metas=vec![Vec::new();6];
+        metas[4].push(NodeMeta {node,word_info,match_variants:vec!["アオイ".into()]});
+        let mut refs=vec![Vec::new();6];
+        refs[2].push(NodeRef {end:4,index:0});
+        let spaces=vec![Some((2,"  ".into())),None,None,None,Some((5," ".into())),None];
+        for reading in ["アオイ","  アオイ "] {
+            let results=Searcher::new(&conn,reading,5,1,1,&refs,&spaces,&metas,true).run();
+            assert_eq!(results.len(),1);
+            assert_eq!(results[0].total_cost,17);
+            assert_eq!(results[0].tokens[0].begin,2);
+            assert_eq!(results[0].tokens[0].end,4);
+            assert_eq!(results[0].tokens[0].supplied_reading,"アオイ");
+        }
+        let advisory=Searcher::new(&conn,"",5,1,1,&refs,&spaces,&metas,false);
+        let state=SearchState {boundary:0,prev_right_id:1,reading_offset:0};
+        assert_eq!(advisory.skip_space(state).unwrap(),SearchState {boundary:2,..state});
+    }
 }

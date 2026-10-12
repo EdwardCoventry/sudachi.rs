@@ -151,7 +151,7 @@ impl<'a, T: DictionaryAccess> Morpheme<'a, T> {
     }
 
     /// Returns total cost from the beginning of the path
-    pub fn total_cost(&self) -> i32 {
+    pub fn total_cost(&self) -> i64 {
         return self.node().total_cost();
     }
 }

@@ -59,6 +59,9 @@ impl<'a> Iterator for TrieEntryIter<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
+        if self.trie.is_empty() {
+            return None;
+        }
         let mut node_pos = self.node_pos;
         let mut unit;
 
@@ -108,10 +111,10 @@ impl<'a> Trie<'a> {
     where
         'a: 'b,
     {
-        let unit: usize = self.get(0) as usize;
+        let node_pos = if self.array.is_empty() { 0 } else { Trie::offset(self.get(0) as usize) };
 
         TrieEntryIter {
-            node_pos: Trie::offset(unit),
+            node_pos,
             data: input,
             trie: &self.array,
             offset,

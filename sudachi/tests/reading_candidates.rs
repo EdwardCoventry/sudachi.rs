@@ -17,7 +17,7 @@
 mod common;
 
 use common::TestStatefulTokenizer as TestTokenizer;
-use sudachi::analysis::reading_candidates::ReadingCandidatePath;
+use sudachi::analysis::reading_candidates::{MatchedToken, ReadingCandidatePath};
 use sudachi::analysis::Mode;
 
 fn surfaces(path: &[sudachi::analysis::reading_candidates::ReadingCandidateToken]) -> Vec<String> {
@@ -202,4 +202,78 @@ fn reading_candidates_min_tokens_too_large_returns_empty() {
         .reading_candidates_with_min_tokens("トウキョウト", 16, 10)
         .expect("no path");
     assert!(no_path.is_empty());
+}
+
+#[test]
+fn matched_tokens_constrain_before_result_limit() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    tok.tok.reset().push_str("東京都");
+    tok.tok.do_tokenize().unwrap();
+    let all = tok.tok.reading_candidates("トウキョウト", 16).unwrap();
+    let split = all.iter().find(|p| p.tokens.len() == 2).unwrap();
+    let required: Vec<_> = split.tokens.iter().map(|t| MatchedToken {
+        begin: t.begin, end: t.end, word_ids: vec![t.word_id],
+    }).collect();
+    let paths = tok.tok.reading_candidates_with_matched_tokens("トウキョウト", 1, 1, &required).unwrap();
+    assert_eq!(paths.len(), 1);
+    assert_eq!(surfaces(&paths[0].tokens), vec!["東京", "都"]);
+    assert!(tok.tok.reading_candidates_with_matched_tokens("トウキョウフ", 1, 1, &required).unwrap().is_empty());
+    let wrong = [MatchedToken { word_ids: vec![all[0].tokens[0].word_id], ..required[0].clone() }];
+    assert!(tok.tok.reading_candidates_with_matched_tokens("トウキョウト", 1, 1, &wrong).unwrap().is_empty());
+    assert!(tok.tok.reading_candidates_with_matched_tokens("トウキョウト", 1, 1, &[required[0].clone(), required[0].clone()]).is_err());
+    assert!(tok.tok.reading_candidates_with_matched_tokens("トウキョウト", 1, 1, &[MatchedToken { end: 4, ..required[0].clone() }]).is_err());
+    // Ordinary best-effort alignment cannot silently replace the required split.
+    assert!(tok.tok.reading_candidates_best_effort_with_matched_tokens("トウキョウフ", 1, 1, &required).unwrap().is_empty());
+}
+
+#[test]
+fn advisory_readings_preserve_required_identity_before_cap() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    tok.tok.reset().push_str("東京都");
+    tok.tok.do_tokenize().unwrap();
+    let exact = tok.tok.reading_candidates("トウキョウト", 16).unwrap();
+    let split = exact.iter().find(|path| path.tokens.len() == 2).unwrap();
+    let required: Vec<_> = split.tokens.iter().map(|t| MatchedToken {
+        begin: t.begin, end: t.end, word_ids: vec![t.word_id],
+    }).collect();
+    let paths = tok.tok.reading_candidates_advisory("トウキョウフ", 1, 1, &required).unwrap();
+    assert_eq!(paths.len(), 1);
+    assert_eq!(surfaces(&paths[0].tokens), vec!["東京", "都"]);
+    assert!(!paths[0].is_exact);
+    assert_eq!(paths[0].tokens[1].reading_form, "ト");
+    assert_eq!(paths[0].tokens[1].supplied_reading, "フ");
+    assert!(!paths[0].tokens[1].reading_matches);
+    assert_eq!(paths[0].tokens[1].word_id, required[1].word_ids[0]);
+    let wrong = [MatchedToken { word_ids: vec![exact[0].tokens[0].word_id], ..required[0].clone() }];
+    assert!(tok.tok.reading_candidates_advisory("トウキョウフ", 1, 1, &wrong).unwrap().is_empty());
+}
+
+#[test]
+fn origin_groups_are_alternatives_inside_one_span_before_caps() {
+    let mut tok=TestTokenizer::new_built(Mode::C);
+    tok.tok.reset().push_str("東京都");
+    tok.tok.do_tokenize().unwrap();
+    let all=tok.tok.reading_candidates("トウキョウト",16).unwrap();
+    let split=all.iter().find(|path| path.tokens.len()==2).unwrap();
+    let whole=all.iter().find(|path| path.tokens.len()==1).unwrap().tokens[0].word_id;
+    let first=&split.tokens[0];
+    let second=&split.tokens[1];
+    let required=vec![MatchedToken {begin:first.begin,end:first.end,word_ids:vec![whole,first.word_id]},
+                      MatchedToken {begin:second.begin,end:second.end,word_ids:vec![second.word_id]}];
+    let paths=tok.tok.reading_candidates_with_matched_tokens("トウキョウト",1,1,&required).unwrap();
+    assert_eq!(paths.len(),1);
+    assert_eq!(surfaces(&paths[0].tokens),vec!["東京","都"]);
+    let advisory=tok.tok.reading_candidates_advisory("トウキョウフ",1,1,&required).unwrap();
+    assert_eq!(advisory.len(),1);
+    assert_eq!(surfaces(&advisory[0].tokens),vec!["東京","都"]);
+    assert!(!advisory[0].is_exact);
+    let empty=[MatchedToken {word_ids:vec![],..required[0].clone()}];
+    assert!(tok.tok.reading_candidates_with_matched_tokens("トウキョウト",0,1,&empty).is_err());
+    let native=tok.tok.native_candidates(1,1,&required).unwrap();
+    assert_eq!(native.len(),1);
+    assert_eq!(surfaces(&native[0].tokens),vec!["東京","都"]);
+    assert_eq!(native[0].tokens[0].reading_form,"トウキョウ");
+    assert_eq!(native[0].tokens[0].supplied_reading,"");
+    assert_eq!(native[0].total_cost,paths[0].total_cost);
+    assert!(tok.tok.native_candidates(0,1,&empty).is_err());
 }

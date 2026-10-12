@@ -161,7 +161,7 @@ impl<D: DictionaryAccess> DictBuilder<D> {
         bldr.lexicon.preload_pos(system.grammar());
         let cm = system.grammar().conn_matrix();
         bldr.lexicon
-            .set_max_conn_sizes(cm.num_left() as _, cm.num_right() as _);
+            .set_max_conn_sizes(cm.num_right() as _, cm.num_left() as _);
         bldr.lexicon
             .set_num_system_words(system.lexicon().size() as usize);
         bldr.prebuilt = Some(system);
@@ -200,7 +200,9 @@ impl<D: DictionaryAccess> DictBuilder<D> {
             DataSource::Data(d) => self.conn.read(d),
         }?;
         self.lexicon
-            .set_max_conn_sizes(self.conn.left(), self.conn.right());
+            // Matrix axes are preceding right-context / following left-context.
+            // Lexical left/right attributes therefore have the opposite bounds.
+            .set_max_conn_sizes(self.conn.right(), self.conn.left());
         self.reporter.collect(
             self.conn.left() as usize * self.conn.right() as usize,
             report,

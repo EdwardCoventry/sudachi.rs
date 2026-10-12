@@ -86,6 +86,12 @@ impl<'a> IndexBuilder<'a> {
         self.data.shrink_to_fit();
         trie_entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
+        // A word-info-only lex has no analysis index. Yada's builder requires
+        // at least one key; serialize an explicitly empty trie instead.
+        if trie_entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let trie = yada::builder::DoubleArrayBuilder::build(&trie_entries);
         match trie {
             Some(t) => Ok(t),
@@ -112,6 +118,17 @@ mod test {
             elems.push(u32::from_le_bytes(arr))
         }
         Trie::new_owned(elems)
+    }
+
+    #[test]
+    fn build_index_empty() {
+        let mut builder = IndexBuilder::new();
+        assert!(builder.build_word_id_table().unwrap().is_empty());
+        let trie = make_trie(builder.build_trie().unwrap());
+        assert_eq!(trie.total_size(), 0);
+        assert_eq!(trie.common_prefix_iterator(b"test", 0).next(), None);
+        assert_eq!(trie.common_prefix_iterator(b"", 0).next(), None);
+        assert_eq!(trie.common_prefix_iterator(b"\0", 0).next(), None);
     }
 
     #[test]

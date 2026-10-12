@@ -43,8 +43,35 @@ impl Display for WordId {
 }
 
 const WORD_MASK: u32 = 0x0fff_ffff;
+// Kiku rows are below 100 million, so this bit is free in reference fields.
+// It distinguishes a fixed native owner from the local U<n> user marker.
+const REFERENCE_FLAG: u32 = 1 << 27;
 
 impl WordId {
+    pub const ROW_LIMIT: u32 = 100_000_000;
+
+    /// Fixed native reference (CSV R<dictionary>:<row>), never a lattice ID.
+    pub fn native_reference(dic: u8, word: u32) -> SudachiResult<WordId> {
+        if dic >= 15 {
+            return Err(SudachiError::LexiconSetError(
+                LexiconSetError::TooLargeDictionaryId(dic as usize),
+            ));
+        }
+        if word >= Self::ROW_LIMIT {
+            return Err(SudachiError::LexiconSetError(
+                LexiconSetError::TooLargeWordId(word, Self::ROW_LIMIT as usize),
+            ));
+        }
+        Ok(Self::new(dic, word | REFERENCE_FLAG))
+    }
+
+    pub fn native_reference_target(self) -> Option<WordId> {
+        if !self.is_oov() && self.word() & REFERENCE_FLAG != 0 {
+            Some(Self::new(self.dic(), self.word() & !REFERENCE_FLAG))
+        } else {
+            None
+        }
+    }
     /// Create WordId from the compressed representation
     pub const fn from_raw(raw: u32) -> WordId {
         WordId { raw }
@@ -115,6 +142,27 @@ impl WordId {
     /// Checks if the WordId corresponds to a special node
     pub fn is_special(&self) -> bool {
         self >= &Self::EOS && self < &Self::INVALID
+    }
+
+    /// Explicit system reference in the dictionary-form field only (CSV S<n>).
+    /// The reserved dictionary nibble distinguishes it from an untagged local
+    /// reference. This is a storage tag, never an OOV/token identity.
+    pub fn system_dictionary_form(word: u32) -> SudachiResult<WordId> {
+        let id = Self::checked(0xf, word)?;
+        if id >= Self::EOS {
+            return Err(SudachiError::LexiconSetError(
+                LexiconSetError::TooLargeWordId(word, (Self::MAX_WORD - 3) as usize),
+            ));
+        }
+        Ok(id)
+    }
+
+    pub fn system_dictionary_form_reference(self) -> Option<WordId> {
+        if self.is_oov() && self < Self::EOS {
+            Some(Self::new(0, self.word()))
+        } else {
+            None
+        }
     }
 
     pub const INVALID: WordId = WordId::from_raw(0xffff_ffff);

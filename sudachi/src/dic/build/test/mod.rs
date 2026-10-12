@@ -15,6 +15,8 @@
  */
 
 mod with_analysis;
+mod dictionary_form_system;
+mod dictionary_form_native;
 
 use crate::analysis::stateless_tokenizer::DictionaryAccess;
 use crate::dic::build::error::{BuildFailure, DicBuildError};
@@ -29,6 +31,52 @@ use crate::error::SudachiError;
 use std::io::sink;
 
 static MATRIX_10_10: &[u8] = include_bytes!("matrix_10x10.def");
+
+#[test]
+fn rectangular_matrix_context_bounds() {
+    // Context IDs are matrix indices, not dictionary word IDs.
+    for (right_size, left_size) in [(3, 2), (2, 3)] {
+        let matrix = format!("{right_size} {left_size}\n0 0 0\n");
+        for (left, right, valid) in [
+            (left_size - 1, right_size - 1, true),
+            (left_size, 0, false),
+            (0, right_size, false),
+        ] {
+            let lex = format!(
+                "検証,{left},{right},1000,検証,名詞,普通名詞,一般,*,*,*,ケンショウ,検証,*,A,*,*,*\n"
+            );
+            let mut builder = DictBuilder::new_system();
+            builder.read_conn(matrix.as_bytes()).unwrap();
+            builder.read_lexicon(lex.as_bytes()).unwrap();
+            let mut output = Vec::new();
+            assert_eq!(builder.compile(&mut output).is_ok(), valid);
+        }
+
+        let mut builder = DictBuilder::new_system();
+        builder.read_conn(matrix.as_bytes()).unwrap();
+        builder
+            .read_lexicon(
+                "基底,0,0,1000,基底,名詞,普通名詞,一般,*,*,*,キテイ,基底,*,A,*,*,*\n".as_bytes(),
+            )
+            .unwrap();
+        let mut output = Vec::new();
+        builder.compile(&mut output).unwrap();
+        let dictionary = DictionaryLoader::read_system_dictionary(&output).unwrap();
+        let dictionary = dictionary.to_loaded().unwrap();
+        for (left, right, valid) in [
+            (left_size - 1, right_size - 1, true),
+            (left_size, 0, false),
+            (0, right_size, false),
+        ] {
+            let lex = format!(
+                "検証,{left},{right},1000,検証,名詞,普通名詞,一般,*,*,*,ケンショウ,検証,*,A,*,*,*\n"
+            );
+            let mut user = DictBuilder::new_user(&dictionary);
+            user.read_lexicon(lex.as_bytes()).unwrap();
+            assert_eq!(user.compile(&mut Vec::new()).is_ok(), valid);
+        }
+    }
+}
 
 #[test]
 fn build_grammar() {
@@ -389,7 +437,7 @@ fn resolve_user_entry_without_system_in_trie() {
 }
 
 #[test]
-fn user_dictionary_keeps_legacy_and_cross_lex_refs() {
+fn user_dictionary_rejects_ambiguous_bare_cross_lex_refs() {
     let mut sys_bldr = DictBuilder::new_system();
     sys_bldr.read_conn(MATRIX_10_10).unwrap();
     sys_bldr
@@ -400,26 +448,15 @@ fn user_dictionary_keeps_legacy_and_cross_lex_refs() {
     let sys = DictionaryLoader::read_system_dictionary(&sys_data).unwrap();
     let sys = sys.to_loaded().unwrap();
 
-    let mut user_bldr = DictBuilder::new_user(&sys);
-    let packed_cross_lex = (2u32 << 28) + 1;
-    let csv = format!(
-        "テスト,1,1,1000,テスト,名詞,普通名詞,一般,*,*,*,テスト,テスト,200000002,C,100000001,{packed_cross_lex},200000003,*"
-    );
-    user_bldr.read_lexicon(csv.as_bytes()).unwrap();
-    user_bldr.resolve().unwrap();
-    let mut user_data = Vec::new();
-    user_bldr.compile(&mut user_data).unwrap();
-    let user = DictionaryLoader::read_user_dictionary(&user_data).unwrap();
-    let merged = sys.merge_dictionary(user).unwrap();
-
-    let mut iter = merged.lexicon().lookup("テスト".as_bytes(), 0);
-    let entry = iter.next().unwrap();
-    assert_eq!(entry.word_id, WordId::new(1, 0));
-    assert_eq!(iter.next(), None);
-
-    let winfo = merged.lexicon_set.get_word_info(entry.word_id).unwrap();
-    assert_eq!(winfo.dictionary_form_word_id(), 200000002);
-    assert_eq!(winfo.a_unit_split(), [WordId::from_raw(100000001)]);
-    assert_eq!(winfo.b_unit_split(), [WordId::from_raw(packed_cross_lex)]);
-    assert_eq!(winfo.word_structure(), [WordId::from_raw(200000003)]);
+    for column in [13,15,16,17] {
+        for ambiguous in ["100000001", "200000002", "536870913"] {
+            let mut row: Vec<_> = "テスト,1,1,1000,テスト,名詞,普通名詞,一般,*,*,*,テスト,テスト,*,C,*,*,*,*"
+                .split(',').collect();
+            row[column] = ambiguous;
+            let csv = row.join(",");
+            let mut user_bldr = DictBuilder::new_user(&sys);
+            let error = user_bldr.read_lexicon(csv.as_bytes()).unwrap_err();
+            assert!(format!("{error:?}").contains("InvalidWordId"), "{column}: {error}");
+        }
+    }
 }

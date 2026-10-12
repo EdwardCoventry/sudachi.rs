@@ -152,6 +152,20 @@ impl JapaneseDictionary {
         Ok(dic)
     }
 
+    pub fn load_tokenisation_profile(&mut self, path: &Path) -> SudachiResult<()> {
+        if self._grammar.conn_matrix().selected_source.is_some() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,"A tokenisation model is already selected").into());
+        }
+        let users = self.storage.user_static_slice();
+        let mut native = vec![unsafe { self.storage.system_static_slice() }];
+        native.extend(users);
+        let sizes: Vec<usize> = (0..self._lexicon.num_lexicons())
+            .map(|id| self._lexicon.lexicon_size(id).unwrap() as usize).collect();
+        let source = crate::dic::selected_source::SelectedSource::load(path,&mut self._grammar,&native,&sizes)?;
+        self._grammar.set_selected_source(source);
+        Ok(())
+    }
+
     /// Returns grammar with the correct lifetime
     pub fn grammar(&self) -> &Grammar<'_> {
         &self._grammar

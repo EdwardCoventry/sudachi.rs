@@ -50,7 +50,7 @@ pub struct Node {
     end: u16,
     left_id: u16,
     right_id: u16,
-    cost: i16,
+    cost: i32,
     word_id: WordId,
     is_whitespace: bool,
 }
@@ -69,7 +69,7 @@ impl Node {
             end,
             left_id,
             right_id,
-            cost,
+            cost: cost as i32,
             word_id,
             is_whitespace: false,
         }
@@ -78,6 +78,11 @@ impl Node {
     pub fn set_range(&mut self, begin: u16, end: u16) {
         self.begin = begin;
         self.end = end;
+    }
+
+    pub fn from_source(begin: u16, end: u16, candidate: &crate::dic::source_candidates::SourceCandidate) -> Self {
+        Self { begin, end, left_id: candidate.left, right_id: candidate.right,
+            cost: candidate.cost, word_id: candidate.word, is_whitespace: false }
     }
 
     pub fn is_whitespace(&self) -> bool {
@@ -105,7 +110,7 @@ impl LatticeNode for Node {
         self.end as usize
     }
 
-    fn cost(&self) -> i16 {
+    fn cost(&self) -> i32 {
         self.cost
     }
 

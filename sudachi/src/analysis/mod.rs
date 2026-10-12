@@ -22,6 +22,7 @@ use mlist::MorphemeList;
 use crate::error::SudachiResult;
 
 pub mod created;
+pub mod furigana;
 mod inner;
 pub mod lattice;
 pub mod mlist;

@@ -25,6 +25,7 @@ use crate::dic::build::error::{BuildFailure, DicWriteResult};
 use crate::dic::build::{MAX_ARRAY_LEN, MAX_DIC_STRING_LEN};
 use crate::dic::word_id::WordId;
 
+#[cfg(test)]
 const NATIVE_LEX_SHIFT: u32 = 28;
 
 #[inline(always)]
@@ -89,14 +90,8 @@ pub(crate) fn parse_u32(data: &str) -> DicWriteResult<u32> {
 #[inline]
 pub(crate) fn parse_dic_form(data: &str) -> DicWriteResult<WordId> {
     if let Some(system) = data.strip_prefix('S') {
-        let id = parse_wordid_raw(system)?;
-        // Dictionary-form-only tag: dic 15 is reserved, never a real lexicon.
-        // It distinguishes explicit system ownership from legacy local IDs.
-        let tagged = WordId::new(15, id.word());
-        if tagged == WordId::INVALID {
-            return Err(BuildFailure::InvalidWordId(data.to_owned()));
-        }
-        Ok(tagged)
+        WordId::system_dictionary_form(parse_u32(system)?)
+            .map_err(|_| BuildFailure::InvalidWordId(data.to_owned()))
     } else if data == "*" || data == "-1" {
         Ok(WordId::INVALID)
     } else {
@@ -106,34 +101,30 @@ pub(crate) fn parse_dic_form(data: &str) -> DicWriteResult<WordId> {
 
 #[inline]
 pub(crate) fn parse_wordid(data: &str) -> DicWriteResult<WordId> {
-    if let Some(stripped) = data.strip_prefix('U') {
+    if let Some(stripped) = data.strip_prefix('R') {
+        let (dic, row) = stripped.split_once(':')
+            .ok_or_else(|| BuildFailure::InvalidWordId(data.to_owned()))?;
+        let dic = u8::from_str(dic).map_err(|_| BuildFailure::InvalidWordId(data.to_owned()))?;
+        WordId::native_reference(dic, parse_u32(row)?)
+            .map_err(|_| BuildFailure::InvalidWordId(data.to_owned()))
+    } else if let Some(stripped) = data.strip_prefix('U') {
         let wid = parse_wordid_raw(stripped);
         wid.map(|w| WordId::new(1, w.word()))
     } else {
-        match u32::from_str(data) {
-            Ok(raw) => {
-                let packed = WordId::from_raw(raw);
-                if packed.dic() > 0 && !packed.is_oov() && raw >= (1 << NATIVE_LEX_SHIFT) {
-                    return Ok(packed);
-                }
-                match WordId::checked(0, raw) {
-                    Ok(id) => Ok(id),
-                    Err(_) => Err(BuildFailure::InvalidWordId(data.to_owned())),
-                }
-            }
-            Err(_) => Err(BuildFailure::InvalidWordId(data.to_owned())),
-        }
+        // Bare CSV numbers are local system rows. Cross-lex references use
+        // R<slot>:<row>; packed native numbers can overlap Kiku stride IDs.
+        parse_wordid_raw(data)
     }
 }
 
 #[inline]
 fn parse_wordid_raw(data: &str) -> DicWriteResult<WordId> {
     match u32::from_str(data) {
-        Ok(v) => match WordId::checked(0, v) {
+        Ok(v) if v < WordId::ROW_LIMIT => match WordId::checked(0, v) {
             Ok(id) => Ok(id),
             Err(_) => Err(BuildFailure::InvalidWordId(data.to_owned())),
         },
-        Err(_) => Err(BuildFailure::InvalidWordId(data.to_owned())),
+        _ => Err(BuildFailure::InvalidWordId(data.to_owned())),
     }
 }
 
@@ -156,7 +147,7 @@ pub(crate) fn parse_u32_list(data: &str) -> DicWriteResult<Vec<u32>> {
 }
 
 lazy_static! {
-    pub(crate) static ref WORD_ID_LITERAL: Regex = Regex::new(r"^U?\d+$").unwrap();
+    pub(crate) static ref WORD_ID_LITERAL: Regex = Regex::new(r"^(?:U?\d+|R\d+:\d+)$").unwrap();
 }
 
 #[inline]
@@ -287,10 +278,18 @@ mod test {
     }
 
     #[test]
-    fn parse_dic_form_explicit_system() {
+    fn parse_dic_form_system_reference() {
         assert_eq!(parse_dic_form("S42").unwrap(), WordId::new(15, 42));
+        assert_eq!(
+            parse_dic_form("S0")
+                .unwrap()
+                .system_dictionary_form_reference(),
+            Some(WordId::new(0, 0))
+        );
+        assert!(parse_dic_form("S268435453").is_err());
+        assert!(parse_dic_form("S268435456").is_err());
         assert!(parse_dic_form("S-1").is_err());
-        assert!(parse_wordid("S42").is_err());
+        assert!(parse_wordid("S0").is_err());
     }
 
     #[test]
@@ -299,9 +298,8 @@ mod test {
     }
 
     #[test]
-    fn parse_wordid_native_packed() {
+    fn parse_wordid_rejects_ambiguous_native_packed_csv_number() {
         let raw = (2 << NATIVE_LEX_SHIFT) + 123;
-        let wid = parse_wordid(&raw.to_string()).unwrap();
-        assert_eq!(wid, WordId::new(2, 123));
+        assert!(parse_wordid(&raw.to_string()).is_err());
     }
 }

@@ -75,7 +75,7 @@ class Dictionary:
 
     @classmethod
     def __init__(cls, config_path: Optional[str | Config] = ..., resource_dir: Optional[str] = ..., dict: Optional[str] = None,
-                 dict_type: Optional[str] = None, *, config: Optional[str | Config] = ..., user_data: Optional[List[bytes]] = ...) -> None:
+                 dict_type: Optional[str] = None, *, config: Optional[str | Config] = ..., user_data: Optional[List[bytes]] = ..., tokenisation_profile: Optional[str] = ...) -> None:
         """
         Creates a sudachi dictionary.
 
@@ -171,6 +171,10 @@ class Dictionary:
         :param out: if passed, reuse the given morpheme list instead of creating a new one.
             See https://worksapplications.github.io/sudachi.rs/python/topics/out_param.html for details.
         """
+        ...
+
+    def word_params(self, word_id: int) -> tuple[int, int, int]:
+        """Stock (left context, right context, cost) for a cross-lex word ID."""
         ...
 
     def word_info(self, word_id: int) -> WordInfo:
@@ -395,9 +399,12 @@ class Tokenizer:
     def tokenize(self,
                  text: str,
                  mode: Union[SplitMode, SplitModeStr, None] = None,
-                 out: Optional[MorphemeList] = None) -> MorphemeList:
+                 out: Optional[MorphemeList] = None,
+                 *, forced_boundaries: Optional[List[int]] = None) -> MorphemeList:
         """
         Break text into morphemes.
+        ``forced_boundaries`` are original Unicode character offsets. Source text
+        and whitespace are preserved; a boundary removed by normalization raises.
 
         :param text: text to analyze.
         :param mode: analysis mode.
@@ -407,6 +414,20 @@ class Tokenizer:
         :param logger: Arg for v0.5.* compatibility. Ignored.
         :param out: tokenization results will be written into this MorphemeList, a new one will be created instead.
             See https://worksapplications.github.io/sudachi.rs/python/topics/out_param.html for details.
+        """
+        ...
+
+    def tokenize_native_candidates(
+        self, text: str, max_results: int = 64, min_tokens: int = 1,
+        *, matched_tokens: Optional[List[Tuple[int,int,Union[int,List[int]]]]] = None,
+        forced_boundaries: Optional[List[int]] = None,
+    ) -> List[dict]:
+        """Native-cost paths with exact identity/span constraints before result limits.
+
+        No reading is supplied or inferred. Dictionary readings remain the source
+        readings, supplied_reading is empty and reading_policy is 'unhinted'.
+        Forced boundaries use original Unicode character offsets and constrain
+        every candidate before ranking and result limits.
         """
         ...
 
@@ -431,20 +452,57 @@ class Tokenizer:
         max_results: int = 64,
         min_tokens: int = 1,
         mismatch_policy: str = "reject",
+        *,
+        matched_tokens: Optional[List[Tuple[int, int, Union[int, List[int]]]]] = None,
+        forced_boundaries: Optional[List[int]] = None,
     ) -> List[dict]:
         """
         Enumerate tokenization candidates constrained by `reading`.
+        Forced boundaries use original Unicode character offsets and constrain
+        every candidate before ranking and result limits.
+
+        ``matched_tokens`` requires existing dictionary tokens before ranking:
+        each tuple is (start, end, cross-lex word ID or list of attested origin IDs), with Unicode character
+        offsets in the original input. Spans must be nonempty and non-overlapping.
+        An origin group requires exactly one of its identities at that span before
+        ranking or result limits. All supplied origins must be eligible in the profile.
+        Impossible identities/spans/readings return no exact path; invalid spans
+        or dictionary IDs raise an error. Empty constraints retain ordinary search.
+        Best-effort policies never relax a required token's identity or reading;
+        if the ordinary winning path lacks it, they return no path.
 
         Returns candidates sorted by total path cost in ascending order.
         Each candidate is a dict with:
         - ``total_cost``: int
         - ``tokens``: list[dict] with surface/reading and word-id fields
         - ``min_tokens`` allows excluding single-token candidates (e.g. set to 2)
-        - ``mismatch_policy`` is ``reject`` (exact only), ``silent``, ``warn``, ``error``, or ``oov``
+        - ``mismatch_policy`` is ``reject`` (exact only), ``advisory``, ``silent``, ``warn``, ``error``, or ``oov``
+        ``advisory`` uses exact reading paths when available; otherwise enumerates
+        native-cost paths with required identities enforced before ranking/capping,
+        aligning hints afterward and preserving every dictionary reading and ID.
+        Unlike best-effort policies, a required token's supplied reading may disagree.
         Best-effort tokens retain ``reading_form`` and include the separately supplied
         ``supplied_reading`` plus a boolean ``reading_matches`` field.
         The ``oov`` policy gives mismatched tokens OOV ids and the supplied reading while
         preserving the selected dictionary token in ``dictionary_reading_form`` and ``source_*``.
+        """
+        ...
+
+    def tokenize_furigana_candidates(
+        self, annotated: str, max_results: int = 64, min_tokens: int = 1,
+        mismatch_policy: str = "advisory", *,
+        matched_tokens: Optional[List[Tuple[int, int, Union[int, List[int]]]]] = None,
+        forced_boundaries: Optional[List[int]] = None,
+    ) -> dict:
+        """Return text, reading, spans and candidates for bracketed furigana.
+
+        Spans use Unicode character offsets in decoded original text/reading,
+        before normalization. They record annotation allocation, not token
+        boundaries or lexical validity. Required token offsets refer to decoded
+        text. Search policies are identical to tokenize_reading_candidates;
+        forced boundaries also refer to decoded original text and constrain
+        all candidates before ranking and result limits.
+        reject returns an empty candidates list for unsupported readings.
         """
         ...
 
@@ -465,6 +523,18 @@ class Tokenizer:
         ...
 
 
+def parse_furigana(annotated: str) -> dict:
+    """Decode bracketed kanji readings into text, reading and contiguous spans.
+
+    Spans contain surface, reading, start, end, reading_start, reading_end and
+    annotated. All offsets are Unicode characters in decoded original strings.
+    Kana outside brackets is retained in both strings. This parses annotation
+    syntax; it does not certify readings or require kanji runs to be tokens.
+    Malformed brackets, unannotated kanji and line breaks raise ValueError.
+    """
+    ...
+
+
 class WordInfo:
     word_id: ClassVar[int] = ...
     word_id_packed: ClassVar[int] = ...
@@ -474,6 +544,8 @@ class WordInfo:
     b_unit_split: ClassVar[List[int]] = ...
     dictionary_form: ClassVar[str] = ...
     dictionary_form_word_id: ClassVar[int] = ...
+    # Physical cross-lex citation, independent of non-inflected POS presentation.
+    native_dictionary_form_word_id: ClassVar[int] = ...
     dictionary_form_word_id_packed: ClassVar[int] = ...
     dictionary_form_word_id_relative: ClassVar[int] = ...
     dictionary_form_lex_id: ClassVar[int] = ...

@@ -137,15 +137,15 @@ fn with_noovbow() {
     assert_eq!(1, path.len());
 }
 
-fn build_node_ai(start: usize, end: usize, cost: i32) -> ResultNode {
+fn build_node_ai(start: usize, end: usize, cost: i64) -> ResultNode {
     build_node(start, end, cost, "アイ")
 }
 
-fn build_node_aiu(start: usize, end: usize, cost: i32) -> ResultNode {
+fn build_node_aiu(start: usize, end: usize, cost: i64) -> ResultNode {
     build_node(start, end, cost, "アイウ")
 }
 
-fn build_node(start: usize, end: usize, cost: i32, surface: &str) -> ResultNode {
+fn build_node(start: usize, end: usize, cost: i64, surface: &str) -> ResultNode {
     let cstart = start / 3;
     let node = Node::new(
         cstart as u16,
@@ -172,7 +172,7 @@ fn build_node(start: usize, end: usize, cost: i32, surface: &str) -> ResultNode 
     )
 }
 
-fn build_node_oov(start: usize, end: usize, cost: i32, surface: &str) -> ResultNode {
+fn build_node_oov(start: usize, end: usize, cost: i64, surface: &str) -> ResultNode {
     let cstart = start / 3;
     let node = Node::new(
         cstart as u16,

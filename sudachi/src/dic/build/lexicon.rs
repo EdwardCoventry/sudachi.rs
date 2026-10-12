@@ -39,7 +39,6 @@ use crate::dic::word_id::WordId;
 use crate::dic::POS_DEPTH;
 use crate::error::SudachiResult;
 
-const LEGACY_LEX_STRIDE: u32 = 100_000_000;
 
 #[cfg(test)]
 mod test;
@@ -429,12 +428,13 @@ impl LexiconReader {
             }
 
             if e.dic_form != WordId::INVALID {
-                let reference = if e.dic_form.dic() == 15 {
-                    WordId::new(0, e.dic_form.word())
+                if let Some(system) = e.dic_form.system_dictionary_form_reference() {
+                    // Explicit system references must never receive the legacy
+                    // external-reference exception in validate_wid.
+                    ctx.transform(Self::validate_wid(system, max_0, 0, "dic_form"))?;
                 } else {
-                    e.dic_form
-                };
-                ctx.transform(Self::validate_wid(reference, max_0, max_1, "dic_form"))?;
+                    ctx.transform(Self::validate_wid(e.dic_form, max_0, max_1, "dic_form"))?;
+                }
             }
 
             for s in e.splits_a.iter() {
@@ -470,14 +470,17 @@ impl LexiconReader {
         dic1_max: usize,
         label: &'static str,
     ) -> DicWriteResult<()> {
+        if let Some(target) = wid.native_reference_target() {
+            // Only the system inventory is known while compiling an extension.
+            // Fixed extension owners are checked against the loaded lexicon set.
+            if target.dic() == 0 {
+                return Self::validate_wid(target, dic0_max, 0, label);
+            }
+            return Ok(());
+        }
         match wid.dic() {
             0 => {
                 if wid.word() < dic0_max as u32 {
-                    return Ok(());
-                }
-                // For user dictionary compilation, keep legacy packed ids
-                // (lex_id * 10**8 + relative_word_id) as external references.
-                if dic1_max > 0 && wid.word() >= LEGACY_LEX_STRIDE {
                     return Ok(());
                 }
                 Err(BuildFailure::InvalidFieldSize {

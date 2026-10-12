@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use memmap2::Mmap;
 use pyo3::ffi::c_str;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PySet, PyString, PyTuple};
 
@@ -135,8 +136,8 @@ impl PyDictionary {
     /// :type user_data: list[bytes] | None
     #[new]
     #[pyo3(
-        text_signature="(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None, user_data=None) -> Dictionary",
-        signature=(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None, user_data=None)
+        text_signature="(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None, user_data=None, tokenisation_profile=None) -> Dictionary",
+        signature=(config_path=None, resource_dir=None, dict=None, dict_type=None, *, config=None, user_data=None, tokenisation_profile=None)
     )]
     fn new(
         py: Python,
@@ -146,6 +147,7 @@ impl PyDictionary {
         dict_type: Option<&str>,
         config: Option<&Bound<PyAny>>,
         user_data: Option<&Bound<PyList>>,
+        tokenisation_profile: Option<PathBuf>,
     ) -> PyResult<Self> {
         if config.is_some() && config_path.is_some() {
             return errors::wrap(Err("Both config and config_path options were specified at the same time, use one of them"));
@@ -212,7 +214,7 @@ impl PyDictionary {
             }
         }
 
-        let jdic = match user_data {
+        let mut jdic = match user_data {
             Some(data) => {
                 let storage = build_storage_from_config(&config, Some(data))?;
                 errors::wrap_ctx(
@@ -225,6 +227,10 @@ impl PyDictionary {
                 "Error while constructing dictionary",
             )?,
         };
+
+        if let Some(path) = tokenisation_profile {
+            errors::wrap(jdic.load_tokenisation_profile(&path))?;
+        }
 
         let pos_data = jdic
             .grammar()
@@ -431,6 +437,9 @@ impl PyDictionary {
             Err(_) => return errors::wrap(Err("out was used twice at the same time")),
         };
 
+        if !Arc::ptr_eq(out_list.dict(),self.dictionary.as_ref().unwrap()) {
+            return Err(PyValueError::new_err("Lookup output belongs to a different dictionary/profile"));
+        }
         out_list.clear();
         errors::wrap_ctx(out_list.lookup(surface, InfoSubset::all()), surface)?;
         Ok(l)
@@ -462,6 +471,17 @@ impl PyDictionary {
         let info = errors::wrap_ctx(lexicon.get_word_info(word_id), &word_id)?;
         let is_non_inflected = is_non_inflected_pos(dic.dictionary.grammar(), info.pos_id());
         Ok(PyWordInfo::from_word_info(info, word_id, is_non_inflected))
+    }
+
+    /// Return stock left context, right context and word cost for a cross-lex ID.
+    fn word_params(&self, word_id: u32) -> PyResult<(i16, i16, i16)> {
+        let dic = self.dictionary.as_ref().unwrap();
+        let lexicon = dic.dictionary.lexicon();
+        let id = unpack_word_id(word_id, lexicon)?;
+        if id.word() >= lexicon.lexicon_size(id.dic() as usize).unwrap() {
+            return errors::wrap(Err("word parameter row out of bounds"));
+        }
+        Ok(lexicon.get_word_param(id))
     }
 
     /// Return per-dictionary lexicon sizes.
@@ -564,7 +584,7 @@ fn build_storage_from_config(
     Ok(storage)
 }
 
-fn unpack_word_id(raw: u32, lexicon: &LexiconSet<'_>) -> PyResult<WordId> {
+pub(crate) fn unpack_word_id(raw: u32, lexicon: &LexiconSet<'_>) -> PyResult<WordId> {
     let max_dict_id = lexicon.num_lexicons();
 
     // Cross-lex id format: lex_id * 10**8 + relative_word_id.
@@ -587,10 +607,7 @@ fn unpack_word_id(raw: u32, lexicon: &LexiconSet<'_>) -> PyResult<WordId> {
         if cross_lex_word_id >= lexicon_size {
             return errors::wrap(Err(format!(
                 "cross-lex word id {} has relative row {} out of range for lex {} (size={})",
-                raw,
-                cross_lex_word_id,
-                cross_lex_id,
-                lexicon_size
+                raw, cross_lex_word_id, cross_lex_id, lexicon_size
             )));
         }
 

@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 mod build;
 mod dictionary;
 mod errors;
+mod furigana;
 mod morpheme;
 mod pos_matcher;
 mod pretokenizer;
@@ -39,5 +40,6 @@ fn sudachipy(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<word_info::PyWordInfo>()?;
     m.add_class::<pos_matcher::PyPosMatcher>()?;
     build::register_functions(m)?;
+    m.add_function(wrap_pyfunction!(furigana::parse_furigana, m)?)?;
     Ok(())
 }
