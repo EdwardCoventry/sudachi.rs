@@ -17,9 +17,9 @@
 use crate::analysis::created::CreatedWords;
 use crate::analysis::inner::{Node, NodeIdx};
 use crate::analysis::lattice::Lattice;
-use crate::analysis::node::{LatticeNode, ResultNode};
+use crate::analysis::node::{LatticeNode, ResultNode, RightId};
 use crate::analysis::reading_candidates::{
-    align_top_path_with_reading, enumerate_reading_candidates, ReadingCandidatePath,
+    align_top_path_with_reading, enumerate_reading_candidates, enumerate_advisory_candidates, enumerate_native_candidates, MatchedToken, ReadingCandidatePath,
 };
 use crate::analysis::stateless_tokenizer::{dump_path, split_path, DictionaryAccess};
 use crate::analysis::Mode;
@@ -179,7 +179,8 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
     }
 
     /// Perform tokenization while forcing token boundaries at the provided character offsets.
-    /// Offsets are in the rewritten-input character space and must exclude BOS (0) and EOS.
+    /// Offsets are in the original-input character space and must exclude BOS (0) and EOS.
+    /// A boundary destroyed by normalization is rejected rather than shifted.
     pub fn do_tokenize_with_forced_boundaries(
         &mut self,
         forced_boundaries: &[usize],
@@ -192,13 +193,24 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
         self.rewrite_input()?;
         self.input.build(self.dictionary.grammar())?;
 
-        if self.input.current().is_empty() {
-            return Ok(());
+        let original_length=self.input.original().chars().count();
+        let mut boundaries=Vec::with_capacity(forced_boundaries.len());
+        for &boundary in forced_boundaries {
+            if boundary==0 || boundary>=original_length {
+                return Err(SudachiError::InvalidRange(boundary,original_length));
+            }
+            let mapped=(0..=self.input.current_chars().len())
+                .find(|&index| self.input.to_orig_char_idx(index)==boundary)
+                .ok_or(SudachiError::InvalidRange(boundary,original_length))?;
+            boundaries.push(mapped);
         }
-
         self.build_lattice()?;
-        let mut path = self.resolve_best_path_with_forced_boundaries(forced_boundaries)?;
-        path = split_path(&self.dictionary, path, self.mode, self.subset, &self.input)?;
+        // Candidate enumeration must use this same constrained lattice. Merely
+        // filtering the top result would let reading/native search bypass the
+        // requested boundaries when it enumerates another path.
+        self.lattice = self.lattice_with_forced_boundaries(&boundaries)?;
+        let path = self.resolve_best_path()?;
+        let path = split_path(&self.dictionary, path, self.mode, self.subset, &self.input)?;
         self.top_path = Some(path);
         Ok(())
     }
@@ -237,17 +249,17 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
         Ok(path)
     }
 
-    fn resolve_best_path_with_forced_boundaries(
+    fn lattice_with_forced_boundaries(
         &self,
         forced_boundaries: &[usize],
-    ) -> SudachiResult<Vec<ResultNode>> {
+    ) -> SudachiResult<Lattice> {
         let mut sorted_boundaries = forced_boundaries.to_vec();
         sorted_boundaries.sort_unstable();
         sorted_boundaries.dedup();
 
         let boundary_count = self.lattice.boundary_count();
         if boundary_count <= 1 {
-            return Ok(Vec::new());
+            return Ok(Lattice::default());
         }
 
         let max_inner_boundary = boundary_count - 1;
@@ -262,6 +274,9 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
         constrained_lattice.reset(boundary_count - 1);
 
         let conn = self.dictionary.grammar().conn_matrix();
+        if let Some(next) = self.lattice.skipped_space_end(0) {
+            constrained_lattice.propagate_skipped_space(0, next);
+        }
         for end in 1..boundary_count {
             for node in self.lattice.nodes_ending_at(end) {
                 if Self::node_crosses_forced_boundary(node, &sorted_boundaries) {
@@ -269,45 +284,13 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
                 }
                 constrained_lattice.insert(node.clone(), conn);
             }
+            // Replay skips after rescoring their constrained predecessors.
+            if let Some(next) = self.lattice.skipped_space_end(end) {
+                constrained_lattice.propagate_skipped_space(end, next);
+            }
         }
         constrained_lattice.connect_eos(conn)?;
-        self.resolve_best_path_from_lattice(&constrained_lattice)
-    }
-
-    fn resolve_best_path_from_lattice(&self, lattice: &Lattice) -> SudachiResult<Vec<ResultNode>> {
-        let lex = self.dictionary.lexicon();
-        let mut path = Vec::new();
-        let mut top_path_ids = Vec::new();
-        lattice.fill_top_path(&mut top_path_ids);
-        top_path_ids.reverse();
-
-        for pid in top_path_ids {
-            let (inner, cost) = lattice.node(pid);
-            let wi = if inner.word_id().is_oov() {
-                let curr_slice = self.input.curr_slice_c(inner.char_range()).to_owned();
-                WordInfoData {
-                    pos_id: inner.word_id().word() as u16,
-                    surface: curr_slice,
-                    ..Default::default()
-                }
-                .into()
-            } else {
-                lex.get_word_info_subset(inner.word_id(), self.subset)?
-            };
-
-            let byte_begin = self.input.to_curr_byte_idx(inner.begin());
-            let byte_end = self.input.to_curr_byte_idx(inner.end());
-
-            path.push(ResultNode::new(
-                inner.clone(),
-                cost,
-                byte_begin as u16,
-                byte_end as u16,
-                wi,
-            ));
-        }
-
-        Ok(path)
+        Ok(constrained_lattice)
     }
 
     #[inline]
@@ -386,7 +369,32 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
         max_results: usize,
         min_tokens: usize,
     ) -> SudachiResult<Vec<ReadingCandidatePath>> {
-        enumerate_reading_candidates(
+        self.reading_candidates_with_matched_tokens(reading, max_results, min_tokens, &[])
+    }
+
+    /// Require existing tokens at original-input character spans before ranking.
+    pub fn validate_profile_constraints(&self, matched_tokens: &[MatchedToken]) -> SudachiResult<()> {
+        if let Some(source)=&self.dictionary.grammar().conn_matrix().selected_source {
+            for required in matched_tokens {
+                if required.word_ids.is_empty() {
+                    return Err(SudachiError::InvalidMatchedToken("required identity group is empty".into()));
+                }
+                for word in &required.word_ids { source.require_word(*word)?; }
+            }
+        }
+        Ok(())
+    }
+
+    /// Require existing tokens at original-input character spans before ranking.
+    pub fn reading_candidates_with_matched_tokens(
+        &self,
+        reading: &str,
+        max_results: usize,
+        min_tokens: usize,
+        matched_tokens: &[MatchedToken],
+    ) -> SudachiResult<Vec<ReadingCandidatePath>> {
+        self.validate_profile_constraints(matched_tokens)?;
+        let mut candidates = enumerate_reading_candidates(
             &self.lattice,
             &self.input,
             self.dictionary.lexicon(),
@@ -395,7 +403,48 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
             reading,
             max_results,
             min_tokens,
-        )
+            matched_tokens,
+        )?;
+        self.restore_reading_surfaces(&mut candidates);
+        Ok(candidates)
+    }
+
+    /// Native discovery with optional exact targets and no supplied reading.
+    pub fn native_candidates(&self,max_results:usize,min_tokens:usize,matched_tokens:&[MatchedToken])
+        -> SudachiResult<Vec<ReadingCandidatePath>> {
+        self.validate_profile_constraints(matched_tokens)?;
+        let mut paths=enumerate_native_candidates(&self.lattice,&self.input,self.dictionary.lexicon(),
+            self.dictionary.grammar().conn_matrix(),self.subset,max_results,min_tokens,matched_tokens)?;
+        self.restore_reading_surfaces(&mut paths);
+        Ok(paths)
+    }
+
+    /// Try complete reading hints first; otherwise retain constrained native
+    /// morphology and report supplied/dictionary reading disagreements.
+    pub fn reading_candidates_advisory(
+        &self, reading: &str, max_results: usize, min_tokens: usize,
+        matched_tokens: &[MatchedToken],
+    ) -> SudachiResult<Vec<ReadingCandidatePath>> {
+        let exact = self.reading_candidates_with_matched_tokens(reading, max_results, min_tokens, matched_tokens)?;
+        if !exact.is_empty() || max_results == 0 { return Ok(exact); }
+        let mut candidates = enumerate_advisory_candidates(
+            &self.lattice, &self.input, self.dictionary.lexicon(),
+            self.dictionary.grammar().conn_matrix(), self.subset,
+            reading, max_results, min_tokens, matched_tokens)?;
+        self.restore_reading_surfaces(&mut candidates);
+        Ok(candidates)
+    }
+
+    fn restore_reading_surfaces(&self, candidates: &mut [ReadingCandidatePath]) {
+        for path in candidates {
+            for token in &mut path.tokens {
+                // Search uses normalized input coordinates; the public evidence
+                // must refer to the original subtitle, including width and case.
+                token.surface = self.input.orig_slice_c(token.begin..token.end).to_owned();
+                token.begin = self.input.to_orig_char_idx(token.begin);
+                token.end = self.input.to_orig_char_idx(token.end);
+            }
+        }
     }
 
     /// Return exact reading candidates, or align the supplied reading to the
@@ -406,7 +455,19 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
         max_results: usize,
         min_tokens: usize,
     ) -> SudachiResult<Vec<ReadingCandidatePath>> {
-        let exact = self.reading_candidates_with_min_tokens(reading, max_results, min_tokens)?;
+        self.reading_candidates_best_effort_with_matched_tokens(reading, max_results, min_tokens, &[])
+    }
+
+    /// Best-effort alignment never relaxes required identity, span or reading.
+    /// If the ordinary winning path lacks a required token, return no path.
+    pub fn reading_candidates_best_effort_with_matched_tokens(
+        &self,
+        reading: &str,
+        max_results: usize,
+        min_tokens: usize,
+        matched_tokens: &[MatchedToken],
+    ) -> SudachiResult<Vec<ReadingCandidatePath>> {
+        let exact = self.reading_candidates_with_matched_tokens(reading, max_results, min_tokens, matched_tokens)?;
         if !exact.is_empty() || max_results == 0 {
             return Ok(exact);
         }
@@ -415,7 +476,13 @@ impl<D: DictionaryAccess> StatefulTokenizer<D> {
             .top_path
             .as_deref()
             .and_then(|path| align_top_path_with_reading(path, reading, min_tokens));
-        Ok(fallback.into_iter().collect())
+        let mut candidates: Vec<_> = fallback.into_iter().collect();
+        self.restore_reading_surfaces(&mut candidates);
+        candidates.retain(|path| matched_tokens.iter().all(|required|
+            path.tokens.iter().any(|token| token.begin == required.begin
+                && token.end == required.end && required.word_ids.contains(&token.word_id)
+                && token.reading_matches)));
+        Ok(candidates)
     }
 }
 
@@ -458,6 +525,9 @@ impl<'a> LatticeBuilder<'a> {
     #[inline]
     fn build_lattice(&mut self) -> SudachiResult<()> {
         self.lattice.reset(self.input.current_chars().len());
+        if self.matrix.selected_source.is_some() {
+            return self.build_selected_source_lattice();
+        }
         let input_bytes = self.input.current().as_bytes();
 
         for (ch_off, &byte_off) in self.input.curr_byte_offsets().iter().enumerate() {
@@ -468,7 +538,6 @@ impl<'a> LatticeBuilder<'a> {
             self.node_buffer.clear();
             let mut created = CreatedWords::default();
             for e in self.lexicon.lookup(input_bytes, byte_off) {
-                // do we really need input.can_bow condition?
                 if (e.end < input_bytes.len()) && !self.input.can_bow(e.end) {
                     continue;
                 }
@@ -513,6 +582,64 @@ impl<'a> LatticeBuilder<'a> {
         Ok(())
     }
 
+    fn build_selected_source_lattice(&mut self) -> SudachiResult<()> {
+        let source=self.matrix.selected_source.as_ref().unwrap();
+        self.lattice.set_global_whitespace_bridge(false);
+        let input=self.input.current();
+        for (ch_off,&byte_off) in self.input.curr_byte_offsets().iter().enumerate() {
+            if !self.lattice.has_previous_node(ch_off) { continue; }
+            let next=source.skip_space(input,byte_off)?;
+            if next!=byte_off {
+                self.lattice.propagate_skipped_space(ch_off,self.input.ch_idx(next));
+                continue;
+            }
+            let mut created=CreatedWords::default();
+            if source.uses_native_oov() {
+                // The system trie owns Sudachi's normalized lookup keys; a
+                // word-info surface need not be its actual trie spelling.
+                // Only the selected stock source's native owner is admitted.
+                for entry in self.lexicon.lookup(input.as_bytes(),byte_off) {
+                    if entry.word_id.dic()!=0 { continue; }
+                    if entry.end<input.len() && !self.input.can_bow(entry.end) { continue; }
+                    let (left,right,cost)=self.lexicon.get_word_param(entry.word_id);
+                    source.matrix.cost(right as u16,left as u16)?;
+                    let mut node=Node::new(ch_off as u16,self.input.ch_idx(entry.end) as u16,
+                        left as u16,right as u16,cost,entry.word_id);
+                    node.set_whitespace(self.is_whitespace_node(&node));
+                    created=created.add_word(node.char_range().len() as i64);
+                    self.lattice.insert(node,self.matrix);
+                }
+            }
+            for candidate in source.lookup(input,byte_off)? {
+                // Indexed stock words use their actual trie keys above. An
+                // enabled extension may expose an existing unindexed stock
+                // identity; its storage sentinel must not become runtime IDs.
+                if source.uses_native_oov() && candidate.word.dic()==0 {
+                    let (stored_left,_,_)=self.lexicon.get_word_param(candidate.word);
+                    if stored_left>=0 { continue; }
+                }
+                if source.uses_native_oov() && candidate.end<input.len() && !self.input.can_bow(candidate.end) { continue; }
+                let mut node=Node::from_source(ch_off as u16,self.input.ch_idx(candidate.end) as u16,&candidate);
+                node.set_whitespace(self.is_whitespace_node(&node));
+                created=created.add_word(node.char_range().len() as i64);
+                self.lattice.insert(node,self.matrix);
+            }
+            if source.uses_native_oov() {
+                self.node_buffer.clear();
+                if !self.input.cat_at_char(ch_off).intersects(CategoryType::NOOOVBOW|CategoryType::NOOOVBOW2) {
+                    for provider in self.oov_providers {
+                        created=self.provide_oovs(ch_off,created,provider.as_ref())?;
+                    }
+                }
+                if created.is_empty() {
+                    let provider=self.oov_providers.last().ok_or(SudachiError::EosBosDisconnect)?;
+                    self.provide_oovs(ch_off,created,provider.as_ref())?;
+                }
+            }
+        }
+        self.lattice.connect_eos(self.matrix)
+    }
+
     #[inline]
     fn provide_oovs<P>(
         &mut self,
@@ -527,6 +654,9 @@ impl<'a> LatticeBuilder<'a> {
         let num_provided = plugin.provide_oov(self.input, char_offset, other, self.node_buffer)?;
         for idx in start_size..(start_size + num_provided) {
             let mut node = self.node_buffer[idx].clone();
+            if let Some(source)=&self.matrix.selected_source {
+                source.matrix.cost(node.right_id(),node.left_id())?;
+            }
             node.set_whitespace(self.is_whitespace_node(&node));
             other = other.add_word(node.char_range().len() as i64);
             self.lattice.insert(node, self.matrix);

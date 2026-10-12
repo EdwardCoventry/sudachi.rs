@@ -19,6 +19,7 @@ indexmap = "2.2" # MIT/Apache 2.0
 itertools = "0.13" # MIT/Apachie 2.0
 lazy_static = "1.4" # MIT/Apache 2.0
 libloading = "0.8" # ISC (MIT-compatible)
+sha2 = "0.10"
 memmap2 = "0.9" # MIT/Apache 2.0
 nom = "7" # MIT
 regex = "1" # MIT/Apache 2.0

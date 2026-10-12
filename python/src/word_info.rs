@@ -40,7 +40,8 @@ pub struct PyWordInfo {
     pos_id: u16,
     normalized_form: String,
     dictionary_form_word_id: i32,
-    dictionary_form_word_id_packed: i32,
+    native_dictionary_form_word_id: i32,
+    dictionary_form_word_id_packed: i64,
     dictionary_form_word_id_relative: i32,
     dictionary_form_lex_id: i32,
     is_dictionary_form: bool,
@@ -69,9 +70,10 @@ fn pack_cross_lex_word_id(lex_id: i32, relative_word_id: i32) -> i32 {
     }
 }
 
-fn pack_native_word_id_bits(lex_id: i32, relative_word_id: i32) -> i32 {
-    let raw = ((lex_id as u32) << NATIVE_LEX_SHIFT) | ((relative_word_id as u32) & NATIVE_WORD_MASK);
-    raw as i32
+fn pack_native_word_id_bits(lex_id: i32, relative_word_id: i32) -> i64 {
+    let raw =
+        ((lex_id as u32) << NATIVE_LEX_SHIFT) | ((relative_word_id as u32) & NATIVE_WORD_MASK);
+    raw as i64
 }
 
 fn unpack_native_word_id(raw_word_id: u32) -> (i32, i32) {
@@ -84,14 +86,6 @@ fn unpack_native_word_id(raw_word_id: u32) -> (i32, i32) {
     }
 }
 
-fn clamp_u32_to_i32(value: u32) -> i32 {
-    if value > i32::MAX as u32 {
-        i32::MAX
-    } else {
-        value as i32
-    }
-}
-
 fn decode_dictionary_form_word_id(
     raw_dictionary_form_word_id: i32,
     default_lex_id: i32,
@@ -99,11 +93,11 @@ fn decode_dictionary_form_word_id(
     default_word_id_packed: u32,
     default_word_id_relative: i32,
     is_non_inflected: bool,
-) -> (i32, i32, i32, i32, bool) {
+) -> (i32, i32, i64, i32, bool) {
     // OOV tokens use dedicated OOV sentinels (-2), distinct from
     // "missing/non-lexicon dictionary form" sentinels (-1).
     if default_lex_id == LEX_ID_OOV {
-        return (LEX_ID_OOV, WORD_ID_OOV, WORD_ID_OOV, WORD_ID_OOV, false);
+        return (LEX_ID_OOV, WORD_ID_OOV, WORD_ID_OOV as i64, WORD_ID_OOV, false);
     }
 
     // Non-inflected POS entries (conjugation type/form: "*", "*") do not expose
@@ -112,7 +106,7 @@ fn decode_dictionary_form_word_id(
         return (
             LEX_ID_MISSING,
             WORD_ID_MISSING,
-            WORD_ID_MISSING,
+            WORD_ID_MISSING as i64,
             WORD_ID_MISSING,
             true,
         );
@@ -128,7 +122,7 @@ fn decode_dictionary_form_word_id(
             return (
                 default_lex_id,
                 default_word_id,
-                clamp_u32_to_i32(default_word_id_packed),
+                default_word_id_packed as i64,
                 default_word_id_relative,
                 false,
             );
@@ -136,46 +130,27 @@ fn decode_dictionary_form_word_id(
         return (
             LEX_ID_MISSING,
             WORD_ID_MISSING,
-            WORD_ID_MISSING,
+            WORD_ID_MISSING as i64,
             WORD_ID_MISSING,
             false,
         );
     }
 
     let raw = raw_dictionary_form_word_id as u32;
-    let (native_lex_id, native_word_id) = unpack_native_word_id(raw);
-
-    if raw >> NATIVE_LEX_SHIFT == 15 {
-        // Explicit S-prefixed dictionary-form reference, tagged by the builder.
-        return (0, native_word_id, native_word_id, native_word_id, false);
+    if let Some(system) = WordId::from_raw(raw).system_dictionary_form_reference() {
+        let relative = system.word() as i32;
+        return (0, relative, relative as i64, relative, false);
     }
+    let raw = WordId::from_raw(raw).native_reference_target()
+        .map(|id| id.as_raw()).unwrap_or(raw);
+    let (native_lex_id, native_word_id) = unpack_native_word_id(raw);
     if raw >= (1 << NATIVE_LEX_SHIFT) && native_lex_id > 0 {
         let relative = native_word_id;
         let cross_lex = pack_cross_lex_word_id(native_lex_id, relative);
         let packed = pack_native_word_id_bits(native_lex_id, relative);
         (native_lex_id, cross_lex, packed, relative, false)
-    } else if raw_dictionary_form_word_id >= CROSS_LEX_ID_STRIDE {
-        let cross_lex_id = raw_dictionary_form_word_id / CROSS_LEX_ID_STRIDE;
-        let relative = raw_dictionary_form_word_id % CROSS_LEX_ID_STRIDE;
-        if cross_lex_id > 0 {
-            return (
-                cross_lex_id,
-                raw_dictionary_form_word_id,
-                pack_native_word_id_bits(cross_lex_id, relative),
-                relative,
-                false,
-            );
-        }
-        // fall through to default-local behavior for malformed values
-        let relative = raw_dictionary_form_word_id;
-        let cross_lex = pack_cross_lex_word_id(default_lex_id, relative);
-        (
-            default_lex_id,
-            cross_lex,
-            pack_native_word_id_bits(default_lex_id, relative),
-            relative,
-            false,
-        )
+    } else if WordId::from_raw(raw_dictionary_form_word_id as u32).native_reference_target().is_some() {
+        (0, native_word_id, native_word_id as i64, native_word_id, false)
     } else {
         // Non-packed dictionary-form ids are relative to the current lexicon.
         let relative = raw_dictionary_form_word_id;
@@ -190,32 +165,35 @@ fn decode_dictionary_form_word_id(
     }
 }
 
-fn normalise_word_reference(raw_word_id: i32, _default_lex_id: i32) -> i32 {
-    if raw_word_id < 0 {
-        return raw_word_id;
-    }
-
-    let raw = raw_word_id as u32;
+fn normalise_word_reference(raw: u32) -> u32 {
     let (native_lex_id, native_word_id) = unpack_native_word_id(raw);
-    if raw >= (1 << NATIVE_LEX_SHIFT) && native_lex_id > 0 {
-        return pack_cross_lex_word_id(native_lex_id, native_word_id);
-    }
-
-    if raw_word_id >= CROSS_LEX_ID_STRIDE {
-        let cross_lex_id = raw_word_id / CROSS_LEX_ID_STRIDE;
-        if cross_lex_id > 0 {
-            return raw_word_id;
-        }
-    }
-
-    raw_word_id
+    pack_cross_lex_word_id(native_lex_id, native_word_id) as u32
 }
 
-fn normalise_split_ids(raw_split_ids: Vec<u32>, default_lex_id: i32) -> Vec<u32> {
+fn normalise_split_ids(raw_split_ids: Vec<u32>, _default_lex_id: i32) -> Vec<u32> {
     raw_split_ids
         .into_iter()
-        .map(|raw| normalise_word_reference(clamp_u32_to_i32(raw), default_lex_id) as u32)
+        .map(normalise_word_reference)
         .collect()
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+
+    #[test]
+    fn all_native_slots_survive_python_reference_projection() {
+        for owner in 0..15 {
+            let reference = WordId::native_reference(owner, 7).unwrap();
+            let cross = owner as i32 * CROSS_LEX_ID_STRIDE + 7;
+            let packed = WordId::new(owner, 7).as_raw();
+            let decoded = decode_dictionary_form_word_id(
+                reference.as_raw() as i32, 2, 200_000_000, 2 << 28, 0, false,
+            );
+            assert_eq!(decoded, (owner as i32, cross, packed as i64, 7, false));
+            assert_eq!(normalise_split_ids(vec![packed], 2), vec![cross as u32]);
+        }
+    }
 }
 
 pub(crate) fn is_non_inflected_pos(grammar: &Grammar<'_>, pos_id: u16) -> bool {
@@ -241,7 +219,12 @@ impl PyWordInfo {
             let lex_id = word_id.dic() as i32;
             let relative_word_id = word_id.word() as i32;
             let cross_lex_word_id = pack_cross_lex_word_id(lex_id, relative_word_id);
-            (lex_id, cross_lex_word_id, word_id.as_raw(), relative_word_id)
+            (
+                lex_id,
+                cross_lex_word_id,
+                word_id.as_raw(),
+                relative_word_id,
+            )
         };
         let (
             dictionary_form_lex_id,
@@ -257,6 +240,12 @@ impl PyWordInfo {
             relative_word_id,
             is_non_inflected,
         );
+        // Inventory/build callers need the physical reference independently
+        // of the learner-facing non-inflected/self interpretation.
+        let native_dictionary_form_word_id = decode_dictionary_form_word_id(
+            word_info.dictionary_form_word_id, lex_id, cross_lex_word_id,
+            packed_word_id, relative_word_id, false,
+        ).1;
         let is_inflected = !is_non_inflected;
         let is_dictionary_form = dictionary_form_missing
             || (dictionary_form_word_id == cross_lex_word_id && dictionary_form_lex_id == lex_id);
@@ -273,6 +262,7 @@ impl PyWordInfo {
             pos_id: word_info.pos_id,
             normalized_form: copy_if_empty(word_info.normalized_form, &word_info.surface),
             dictionary_form_word_id,
+            native_dictionary_form_word_id,
             dictionary_form_word_id_packed,
             dictionary_form_word_id_relative,
             dictionary_form_lex_id,

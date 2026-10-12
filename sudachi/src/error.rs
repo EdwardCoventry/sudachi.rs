@@ -31,6 +31,8 @@ pub type SudachiResult<T> = Result<T, SudachiError>;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum SudachiError {
+    #[error("Invalid bracketed furigana: {0}")]
+    InvalidFurigana(String),
     #[error("{context}: {cause}")]
     ErrWithContext {
         context: String,
@@ -93,6 +95,12 @@ pub enum SudachiError {
 
     #[error("Invalid range: {0}..{1}")]
     InvalidRange(usize, usize),
+
+    #[error("Invalid matched-token constraint: {0}")]
+    InvalidMatchedToken(String),
+
+    #[error("Required native token {word_id} is excluded by tokenisation source {profile}")]
+    ProfileConstraintConflict { profile: String, word_id: u32 },
 
     #[error("No out of vocabulary plugin provided")]
     NoOOVPluginProvided,

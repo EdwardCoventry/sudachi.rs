@@ -244,6 +244,38 @@ fn forced_split_empty_boundaries_matches_default_tokenize() {
 }
 
 #[test]
+fn forced_boundaries_constrain_subsequent_candidate_enumeration() {
+    let mut tok = TestTokenizer::new_built(Mode::C);
+    tok.tok.reset().push_str("東京都");
+    tok.tok.do_tokenize_with_forced_boundaries(&[2]).unwrap();
+    for paths in [tok.tok.reading_candidates("トウキョウト", 1).unwrap(),
+                  tok.tok.native_candidates(1, 1, &[]).unwrap(),
+                  tok.tok.reading_candidates_advisory("トウキョウフ", 1, 1, &[]).unwrap()] {
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].tokens.iter().map(|t|t.surface.as_str()).collect::<Vec<_>>(),
+                   vec!["東京", "都"]);
+        assert!(paths[0].tokens.iter().all(|t| !(t.begin < 2 && 2 < t.end)));
+    }
+}
+
+#[test]
+fn forced_split_original_offsets_survive_normalization() {
+    let mut tok=TestTokenizer::new_built(Mode::C);
+    let text="東京都ｶﾞ";
+    let surfaces=tokenize_with_forced_boundaries(&mut tok,text,&[2,3]);
+    assert_eq!(surfaces.concat(),text);
+    let spans:Vec<_>=tok.result.iter().map(|m|(m.begin_c(),m.end_c())).collect();
+    assert!(spans.iter().all(|(begin,end)| !(*begin<2 && 2<*end) && !(*begin<3 && 3<*end)));
+    assert_eq!(spans.last().unwrap().1,5);
+    tok.tok.reset().push_str(text);
+    // Normalization combines ｶ and ﾞ; a boundary inside that grapheme has no
+    // exact rewritten coordinate and must not be moved to a neighbouring word.
+    assert!(tok.tok.do_tokenize_with_forced_boundaries(&[4]).is_err());
+    tok.tok.reset().push_str("");
+    assert!(tok.tok.do_tokenize_with_forced_boundaries(&[1]).is_err());
+}
+
+#[test]
 fn global_whitespace_bridge_keeps_surface_sequence_and_non_increasing_cost() {
     let text = "すもも も もも も ももの うち";
     let mut tok = TestTokenizer::new_built(Mode::C);

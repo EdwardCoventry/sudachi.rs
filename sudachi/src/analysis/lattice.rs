@@ -32,10 +32,12 @@ use std::io::Write;
 /// Current implementation has 25% efficiency loss because of padding :(
 /// Maybe we should use array-of-structs layout instead, but I want to try to measure the
 /// efficiency of that without the effects of the current rewrite.
+#[derive(Clone)]
 struct VNode {
-    total_cost: i32,
+    total_cost: i64,
     right_id: u16,
     prev_non_ws_right_id: u16,
+    origin: Option<NodeIdx>,
 }
 
 impl RightId for VNode {
@@ -47,7 +49,7 @@ impl RightId for VNode {
 
 impl PathCost for VNode {
     #[inline]
-    fn total_cost(&self) -> i32 {
+    fn total_cost(&self) -> i64 {
         self.total_cost
     }
 }
@@ -56,11 +58,12 @@ impl VNode {
     const NONE_RIGHT_ID: u16 = u16::MAX;
 
     #[inline]
-    fn new(right_id: u16, total_cost: i32, prev_non_ws_right_id: u16) -> VNode {
+    fn new(right_id: u16, total_cost: i64, prev_non_ws_right_id: u16) -> VNode {
         VNode {
             right_id,
             total_cost,
             prev_non_ws_right_id,
+            origin: None,
         }
     }
 }
@@ -77,9 +80,11 @@ impl VNode {
 #[derive(Default)]
 pub struct Lattice {
     ends: Vec<Vec<VNode>>,
+    skipped: Vec<Vec<VNode>>,
+    space_ends: Vec<Option<usize>>,
     ends_full: Vec<Vec<Node>>,
     indices: Vec<Vec<NodeIdx>>,
-    eos: Option<(NodeIdx, i32)>,
+    eos: Option<(NodeIdx, i64)>,
     size: usize,
     global_whitespace_bridge: bool,
 }
@@ -103,6 +108,11 @@ impl Lattice {
             .unwrap_or(&[])
     }
 
+    /// Selected-model SPACE edges do not create lexical nodes.
+    pub fn skipped_space_end(&self, begin: usize) -> Option<usize> {
+        self.space_ends.get(begin).copied().flatten()
+    }
+
     fn reset_vec<T>(data: &mut Vec<Vec<T>>, target: usize) {
         for v in data.iter_mut() {
             v.clear();
@@ -120,6 +130,9 @@ impl Lattice {
     /// specified length (in codepoints)
     pub fn reset(&mut self, length: usize) {
         Self::reset_vec(&mut self.ends, length + 1);
+        Self::reset_vec(&mut self.skipped, length + 1);
+        self.space_ends.clear();
+        self.space_ends.resize(length + 1, None);
         Self::reset_vec(&mut self.ends_full, length + 1);
         Self::reset_vec(&mut self.indices, length + 1);
         self.eos = None;
@@ -128,7 +141,23 @@ impl Lattice {
     }
 
     fn connect_bos(&mut self) {
-        self.ends[0].push(VNode::new(0, 0, VNode::NONE_RIGHT_ID));
+        let bos = VNode::new(0, 0, VNode::NONE_RIGHT_ID);
+        self.ends[0].push(bos);
+    }
+
+    /// MeCab skips model SPACE characters without an emission or transition.
+    /// Keep their predecessor identities and original spans, rather than creating
+    /// fake vocabulary records or borrowing stock SPACE parameters.
+    pub fn propagate_skipped_space(&mut self, begin: usize, end: usize) {
+        assert!(end > begin && end < self.size);
+        self.space_ends[begin] = Some(end);
+        let mut states: Vec<_> = self.ends[begin].iter().enumerate().map(|(index, node)| {
+            let mut state=node.clone();
+            state.origin=Some(NodeIdx::new(begin as u16,index as u16));
+            state
+        }).collect();
+        states.extend(self.skipped[begin].iter().cloned());
+        self.skipped[end].extend(states);
     }
 
     /// Find EOS node -- finish the lattice construction
@@ -138,7 +167,7 @@ impl Lattice {
         let eos_end = (len - 1) as u16;
         let node = Node::new(eos_start, eos_end, 0, 0, 0, WordId::EOS);
         let (idx, cost, _) = self.connect_node(&node, conn);
-        if cost == i32::MAX {
+        if cost == i64::MAX {
             Err(SudachiError::EosBosDisconnect)
         } else {
             self.eos = Some((idx, cost));
@@ -148,10 +177,15 @@ impl Lattice {
 
     /// Insert a single node in the lattice, founding the path to the previous node
     /// Assumption: lattice for all previous boundaries is already constructed
-    pub fn insert(&mut self, node: Node, conn: &ConnectionMatrix) -> i32 {
+    pub fn insert(&mut self, node: Node, conn: &ConnectionMatrix) -> i64 {
+        self.insert_single(node, conn)
+    }
+
+    fn insert_single(&mut self, node: Node, conn: &ConnectionMatrix) -> i64 {
         let (idx, cost, prev_non_ws_right_id) = self.connect_node(&node, conn);
         let end_idx = node.end();
-        self.ends[end_idx].push(VNode::new(node.right_id(), cost, prev_non_ws_right_id));
+        let vnode = VNode::new(node.right_id(), cost, prev_non_ws_right_id);
+        self.ends[end_idx].push(vnode);
         self.indices[end_idx].push(idx);
         self.ends_full[end_idx].push(node);
         cost
@@ -160,25 +194,32 @@ impl Lattice {
     /// Find the path with the minimal cost through the lattice to the attached node
     /// Assumption: lattice for all previous boundaries is already constructed
     #[inline]
-    pub fn connect_node(&self, r_node: &Node, conn: &ConnectionMatrix) -> (NodeIdx, i32, u16) {
+    pub fn connect_node(
+        &self,
+        r_node: &Node,
+        conn: &ConnectionMatrix,
+    ) -> (NodeIdx, i64, u16) {
         let begin = r_node.begin();
 
-        let node_cost = r_node.cost() as i32;
-        let mut min_cost = i32::MAX;
+        let node_cost = conn.node_cost(r_node);
+        let mut min_cost = i64::MAX;
         let mut prev_idx = NodeIdx::empty();
         let mut prev_non_ws_right_id = VNode::NONE_RIGHT_ID;
 
-        for (i, l_vnode) in self.ends[begin].iter().enumerate() {
+        let predecessors=self.ends[begin].iter().enumerate()
+            .map(|(index,node)|(NodeIdx::new(begin as u16,index as u16),node))
+            .chain(self.skipped[begin].iter().map(|node|(node.origin.expect("skipped states retain their predecessor"),node)));
+        for (origin, l_vnode) in predecessors {
             if !l_vnode.is_connected_to_bos() {
                 continue;
             }
 
-            let l_node_is_whitespace = if begin == 0 {
+            let l_node_is_whitespace = if origin.end() == 0 {
                 false
             } else {
-                self.ends_full[begin][i].is_whitespace()
+                self.ends_full[origin.end() as usize][origin.index() as usize].is_whitespace()
             };
-            let normal_connect_cost = conn.cost(l_vnode.right_id(), r_node.left_id()) as i32;
+            let normal_connect_cost = conn.transition(l_vnode.right_id(), r_node.left_id());
             let normal_cost = l_vnode.total_cost() + normal_connect_cost + node_cost;
 
             let mut best_cost_for_pred = normal_cost;
@@ -187,8 +228,7 @@ impl Lattice {
                 && !r_node.is_whitespace()
                 && l_vnode.prev_non_ws_right_id != VNode::NONE_RIGHT_ID
             {
-                let bridged_connect_cost =
-                    conn.cost(l_vnode.prev_non_ws_right_id, r_node.left_id()) as i32;
+                let bridged_connect_cost = conn.transition(l_vnode.prev_non_ws_right_id, r_node.left_id());
                 let bridged_cost = l_vnode.total_cost() + bridged_connect_cost + node_cost;
                 if bridged_cost < best_cost_for_pred {
                     best_cost_for_pred = bridged_cost;
@@ -197,7 +237,7 @@ impl Lattice {
 
             if best_cost_for_pred < min_cost {
                 min_cost = best_cost_for_pred;
-                prev_idx = NodeIdx::new(begin as u16, i as u16);
+                prev_idx = origin;
                 prev_non_ws_right_id = if r_node.is_whitespace() {
                     l_vnode.prev_non_ws_right_id
                 } else {
@@ -212,10 +252,11 @@ impl Lattice {
     /// Checks if there exist at least one at the word end boundary
     pub fn has_previous_node(&self, i: usize) -> bool {
         self.ends.get(i).map(|d| !d.is_empty()).unwrap_or(false)
+            || self.skipped.get(i).map(|d| !d.is_empty()).unwrap_or(false)
     }
 
     /// Lookup a node for the index
-    pub fn node(&self, id: NodeIdx) -> (&Node, i32) {
+    pub fn node(&self, id: NodeIdx) -> (&Node, i64) {
         let node = &self.ends_full[id.end() as usize][id.index() as usize];
         let cost = self.ends[id.end() as usize][id.index() as usize].total_cost;
         (node, cost)
@@ -249,6 +290,47 @@ impl Lattice {
 mod tests {
     use super::*;
     use crate::dic::word_id::WordId;
+
+    #[test]
+    fn selected_source_scores_bos_eos_and_skips_space_without_stock_costs() {
+        use crate::dic::selected_source::{SelectedSource,tests::fixture};
+        use crate::util::testing::{build_mock_grammar,GRAMMAR_BYTES};
+        let (_assets,manifest)=fixture();
+        let mut grammar=build_mock_grammar(&GRAMMAR_BYTES);
+        let source=SelectedSource::load(manifest.path(),&mut grammar,&[&[] as &[u8];15],&[2;15]).unwrap();
+        // Stock transitions are intentionally incompatible with the selected path.
+        let poisoned=vec![100u8;200];
+        let mut conn=ConnectionMatrix::from_offset_size(&poisoned,0,10,10).unwrap();
+        conn.selected_source=Some(source);
+        let candidates=conn.selected_source.as_ref().unwrap().lookup(" 青い ",1).unwrap();
+        let mut lattice=Lattice::default();
+        lattice.reset(4);
+        lattice.propagate_skipped_space(0,1);
+        for candidate in candidates {
+            lattice.insert(Node::from_source(1,3,&candidate),&conn);
+        }
+        lattice.propagate_skipped_space(3,4);
+        lattice.connect_eos(&conn).unwrap();
+        assert_eq!(lattice.eos.unwrap().1,30004);
+        let mut path=Vec::new();
+        lattice.fill_top_path(&mut path);
+        let spans: Vec<_>=path.iter().map(|index|lattice.node(*index).0)
+            .filter(|node|!node.word_id().is_special()).map(LatticeNode::char_range).collect();
+        assert_eq!(spans,vec![1..3]);
+    }
+
+    #[test]
+    fn wide_priorities_accumulate_without_i16_clipping_or_i32_overflow() {
+        let raw=vec![0u8;8];
+        let conn=ConnectionMatrix::from_offset_size(&raw,0,2,2).unwrap();
+        let candidate=crate::dic::source_candidates::SourceCandidate {
+            word:WordId::checked(1,1).unwrap(),left:1,right:1,cost:-2_000_000_000,end:0 };
+        let mut lattice=Lattice::default();
+        lattice.reset(3);
+        for begin in 0..3 { lattice.insert(Node::from_source(begin,begin+1,&candidate),&conn); }
+        lattice.connect_eos(&conn).unwrap();
+        assert_eq!(lattice.eos.unwrap().1,-6_000_000_000);
+    }
 
     fn make_node(
         begin: u16,
@@ -423,13 +505,15 @@ impl Lattice {
                     pos,
                     r_node.left_id(),
                     r_node.right_id(),
-                    r_node.cost()
+                    grammar
+                        .conn_matrix()
+                        .node_cost(r_node)
                 )?;
 
                 let conn = grammar.conn_matrix();
 
                 for l_node in &self.ends[r_node.begin()] {
-                    let connect_cost = conn.cost(l_node.right_id(), r_node.left_id());
+                    let connect_cost = conn.transition(l_node.right_id(), r_node.left_id());
                     write!(out, " {}", connect_cost)?;
                 }
 

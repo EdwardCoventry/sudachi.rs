@@ -116,14 +116,34 @@ impl LexiconSet<'_> {
     /// Rest will be of default values (0 or empty).
     pub fn get_word_info_subset(&self, id: WordId, subset: InfoSubset) -> SudachiResult<WordInfo> {
         let dict_id = id.dic();
-        let mut word_info: WordInfoData = self.lexicons[dict_id as usize]
+        let owner = self.lexicons.get(dict_id as usize)
+            .ok_or(LexiconSetError::TooLargeDictionaryId(dict_id as usize))?;
+        let mut word_info: WordInfoData = owner
             .get_word_info(id.word(), subset)?
             .into();
 
-        let df = WordId::from_raw(word_info.dictionary_form_word_id as u32);
-        if df != WordId::INVALID && df.dic() == 15 {
-            let base = self.lexicons[0].get_word_info(df.word(), InfoSubset::SURFACE)?;
-            word_info.dictionary_form = base.surface().to_owned();
+        if subset.contains(InfoSubset::DIC_FORM_WORD_ID) {
+            let reference = WordId::from_raw(word_info.dictionary_form_word_id as u32);
+            if reference != WordId::INVALID {
+                let target = if let Some(system) = reference.system_dictionary_form_reference() {
+                    system
+                } else if let Some(fixed) = reference.native_reference_target() {
+                    fixed
+                } else if reference.dic() <= 1 {
+                    // Bare dictionary-form numbers and U<n> are local to the owner.
+                    WordId::checked(dict_id, reference.word())?
+                } else {
+                    reference
+                };
+                self.check_reference(target)?;
+                // Surface-only access prevents dictionary-form cycles from recursing.
+                let surface = self.lexicons[target.dic() as usize]
+                    .get_word_info(target.word(), InfoSubset::SURFACE)?;
+                word_info.dictionary_form = surface.surface().to_owned();
+                if reference.dic() == 1 && reference.native_reference_target().is_none() {
+                    word_info.dictionary_form_word_id = target.as_raw() as i32;
+                }
+            }
         }
 
         if subset.contains(InfoSubset::POS_ID) {
@@ -137,14 +157,17 @@ impl LexiconSet<'_> {
 
         if subset.contains(InfoSubset::SPLIT_A) {
             Self::update_dict_id(&mut word_info.a_unit_split, dict_id)?;
+            self.check_references(&word_info.a_unit_split)?;
         }
 
         if subset.contains(InfoSubset::SPLIT_B) {
             Self::update_dict_id(&mut word_info.b_unit_split, dict_id)?;
+            self.check_references(&word_info.b_unit_split)?;
         }
 
         if subset.contains(InfoSubset::WORD_STRUCTURE) {
             Self::update_dict_id(&mut word_info.word_structure, dict_id)?;
+            self.check_references(&word_info.word_structure)?;
         }
 
         Ok(word_info.into())
@@ -158,12 +181,32 @@ impl LexiconSet<'_> {
 
     fn update_dict_id(split: &mut Vec<WordId>, dict_id: u8) -> SudachiResult<()> {
         for id in split.iter_mut() {
+            if let Some(target) = id.native_reference_target() {
+                *id = target;
+                continue;
+            }
             let cur_dict_id = id.dic();
             if cur_dict_id == 1 {
                 // User dictionaries store local references with dic_id=1.
                 // Keep explicit cross-lex ids (dic_id >= 2) untouched.
                 *id = WordId::checked(dict_id, id.word())?;
             }
+        }
+        Ok(())
+    }
+
+    fn check_reference(&self, id: WordId) -> SudachiResult<()> {
+        let size = self.lexicon_size(id.dic() as usize)
+            .ok_or(LexiconSetError::TooLargeDictionaryId(id.dic() as usize))?;
+        if id.word() >= size {
+            return Err(LexiconSetError::TooLargeWordId(id.word(), id.dic() as usize).into());
+        }
+        Ok(())
+    }
+
+    fn check_references(&self, references: &[WordId]) -> SudachiResult<()> {
+        for id in references {
+            self.check_reference(*id)?;
         }
         Ok(())
     }

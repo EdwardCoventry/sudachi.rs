@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use pyo3::exceptions::PyIndexError;
+use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::ffi::c_str;
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyString, PyTuple, PyType};
@@ -116,7 +116,7 @@ impl PyMorphemeListWrapper {
 
     /// Returns the total cost of the path.
     #[pyo3(text_signature = "(self, /) -> int")]
-    fn get_internal_cost(&self, py: Python) -> i32 {
+    fn get_internal_cost(&self, py: Python) -> i64 {
         self.internal(py).get_internal_cost()
     }
 
@@ -125,7 +125,7 @@ impl PyMorphemeListWrapper {
     /// Tokenization itself is unchanged. This score ignores whitespace tokens and
     /// connects neighboring non-whitespace tokens directly.
     #[pyo3(text_signature = "(self, /) -> int")]
-    fn get_internal_cost_whitespace_bridged(&self, py: Python) -> i32 {
+    fn get_internal_cost_whitespace_bridged(&self, py: Python) -> i64 {
         self.internal(py).get_internal_cost_whitespace_bridged()
     }
 
@@ -415,16 +415,20 @@ impl PyMorpheme {
             Err(_) => return errors::wrap(Err("out was used twice at the same time")),
         };
 
-        out_ref.clear();
-        let splitted = errors::wrap_ctx(
-            list.internal(py).split_into(mode, self.index, out_ref),
-            "Error while splitting morpheme",
+        if !Arc::ptr_eq(out_ref.dict(),list.internal(py).dict()) {
+            return Err(PyValueError::new_err("Split output belongs to a different dictionary/profile"));
+        }
+        // Validate in a temporary list so an excluded child cannot erase a
+        // caller's existing output before the typed conflict is reported.
+        let mut split_result = list.internal(py).empty_clone();
+        let splitted = errors::wrap_analysis(
+            list.internal(py).split_into(mode, self.index, &mut split_result),
         )?;
-
         if add_single.unwrap_or(true) && !splitted {
             list.internal(py)
-                .copy_slice(self.index, self.index + 1, out_ref);
+                .copy_slice(self.index, self.index + 1, &mut split_result);
         }
+        out_ref.replace_results(&split_result);
 
         Ok(out_cell)
     }

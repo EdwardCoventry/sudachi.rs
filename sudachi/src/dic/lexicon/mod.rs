@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use std::cmp;
 use std::mem::size_of;
 
 use crate::analysis::stateful_tokenizer::StatefulTokenizer;
@@ -88,6 +87,11 @@ impl<'a> Lexicon<'a> {
         offset += word_id_table.storage_size();
 
         let (_rest, word_params_size) = u32_parser_offset(buf, offset)?;
+        if word_params_size >= WordId::ROW_LIMIT {
+            return Err(crate::dic::lexicon_set::LexiconSetError::TooLargeWordId(
+                word_params_size, WordId::ROW_LIMIT as usize,
+            ).into());
+        }
         let word_params = WordParams::new(buf, word_params_size, offset + 4);
         offset += word_params.storage_size();
 
@@ -157,10 +161,10 @@ impl<'a> Lexicon<'a> {
             tok.do_tokenize()?;
             ms.collect_results(&mut tok)?;
             let internal_cost = ms.get_internal_cost();
-            let cost = internal_cost + Lexicon::USER_DICT_COST_PER_MORPH * ms.len() as i32;
-            let cost = cmp::min(cost, i16::MAX as i32);
-            let cost = cmp::max(cost, i16::MIN as i32);
-            self.word_params.set_cost(wid, cost as i16);
+            let cost = internal_cost + Lexicon::USER_DICT_COST_PER_MORPH as i64 * ms.len() as i64;
+            let cost = i16::try_from(cost).map_err(|_| std::io::Error::new(
+                std::io::ErrorKind::InvalidData,"Calculated cost exceeds native storage; use wide model parameters"))?;
+            self.word_params.set_cost(wid, cost);
         }
 
         Ok(())

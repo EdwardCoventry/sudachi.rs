@@ -127,14 +127,15 @@ impl<T: DictionaryAccess> MorphemeList<T> {
         if num_splits == 0 {
             Ok(false)
         } else {
-            out.assign_input(self);
-            let data = out.nodes.mut_data();
             let input = self.input();
             let subset = self.subset();
-            data.reserve(num_splits);
-            for n in node.split(mode, self.dict().lexicon(), subset, input.deref()) {
-                data.push(n);
+            let mut split: Vec<_> = node.split(mode, self.dict().lexicon(), subset, input.deref()).collect();
+            if let Some(source) = &self.dict().grammar().conn_matrix().selected_source {
+                source.materialize_path(&mut split)?;
             }
+            // Validate the complete split before changing the caller's output.
+            out.assign_input(self);
+            out.nodes.mut_data().extend(split);
             Ok(true)
         }
     }
@@ -169,7 +170,7 @@ impl<T: DictionaryAccess> MorphemeList<T> {
     }
 
     /// Gets the whole cost of the path
-    pub fn get_internal_cost(&self) -> i32 {
+    pub fn get_internal_cost(&self) -> i64 {
         let len = self.len();
         if len == 0 {
             return 0;
@@ -185,14 +186,14 @@ impl<T: DictionaryAccess> MorphemeList<T> {
     /// Tokenization output is unchanged. This is a score-only variant:
     /// separator tokens are ignored for scoring and neighboring
     /// content tokens are connected directly.
-    pub fn get_internal_cost_whitespace_bridged(&self) -> i32 {
+    pub fn get_internal_cost_whitespace_bridged(&self) -> i64 {
         if self.is_empty() {
             return 0;
         }
 
         let conn = self.dict.grammar().conn_matrix();
         let mut prev_non_ws: Option<&ResultNode> = None;
-        let mut total_cost = 0i32;
+        let mut total_cost = 0i64;
 
         for node in &self.nodes.data {
             if Self::is_bridge_separator_surface(node.word_info().surface()) {
@@ -200,14 +201,14 @@ impl<T: DictionaryAccess> MorphemeList<T> {
             }
 
             // Split A/B nodes use sentinel params and can't be rescored this way.
-            if node.left_id() == u16::MAX || node.right_id() == u16::MAX || node.cost() == i16::MAX
+            if node.left_id() == u16::MAX || node.right_id() == u16::MAX || node.cost() == i16::MAX as i32
             {
                 return self.get_internal_cost();
             }
 
             if let Some(prev) = prev_non_ws {
                 total_cost +=
-                    conn.cost(prev.right_id(), node.left_id()) as i32 + node.cost() as i32;
+                    conn.transition(prev.right_id(), node.left_id()) + node.cost() as i64;
             }
             prev_non_ws = Some(node);
         }
@@ -238,6 +239,12 @@ impl<T: DictionaryAccess> MorphemeList<T> {
         self.input.deref().borrow().subset
     }
 
+    /// Replace output nodes together with the original-input span mapping.
+    pub fn replace_results(&mut self, other: &Self) {
+        self.assign_input(other);
+        self.nodes.mut_data().clone_from(&other.nodes.data);
+    }
+
     pub fn copy_slice(&self, start: usize, end: usize, out: &mut Self) {
         let out_data = out.nodes.mut_data();
         out_data.extend_from_slice(&self.nodes.data[start..end]);
@@ -254,6 +261,32 @@ impl<T: DictionaryAccess> MorphemeList<T> {
 
         let mut result = 0;
         let lex = self.dict.lexicon();
+        if let Some(source) = &self.dict.grammar().conn_matrix().selected_source {
+            let mut candidates=Vec::new();
+            if source.uses_native_oov() {
+                for entry in lex.lookup(query.as_bytes(),0) {
+                    if entry.end!=query.len() || entry.word_id.dic()!=0 { continue; }
+                    source.require_word(entry.word_id)?;
+                    let (left,right,cost)=lex.get_word_param(entry.word_id);
+                    source.matrix.cost(right as u16,left as u16)?;
+                    candidates.push(Node::new(0,end_chars as _,left as u16,right as u16,cost,entry.word_id));
+                }
+            }
+            for candidate in source.lookup(query,0)? {
+                if candidate.word.is_oov() || candidate.end!=query.len() { continue; }
+                if source.uses_native_oov() && candidate.word.dic()==0 {
+                    let (stored_left,_,_)=lex.get_word_param(candidate.word);
+                    if stored_left>=0 { continue; }
+                }
+                candidates.push(Node::from_source(0,end_chars as _,&candidate));
+            }
+            for node in candidates {
+                let info=lex.get_word_info_subset(node.word_id(),subset)?;
+                self.nodes.data.push(ResultNode::new(node,0,0,query.len() as _,info));
+                result+=1;
+            }
+            return Ok(result);
+        }
         for entry in lex.lookup(query.as_bytes(), 0) {
             if entry.end != query.len() {
                 continue;

@@ -16,3 +16,12 @@ class SudachiError(Exception):
     """Base class for all Sudachipy exceptions.
     """
     pass
+
+
+class ProfileConstraintConflict(SudachiError):
+    """A required native identity is unavailable under the selected source."""
+
+    def __init__(self, main_lex: str, native_word_id: int):
+        self.main_lex = main_lex
+        self.native_word_id = native_word_id
+        super().__init__(f"Required native token {native_word_id} is excluded by tokenisation source {main_lex}")

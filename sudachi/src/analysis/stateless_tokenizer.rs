@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-use crate::analysis::node::ResultNode;
+use crate::analysis::node::{LatticeNode, ResultNode};
 use crate::analysis::stateful_tokenizer::StatefulTokenizer;
 use std::ops::Deref;
 
@@ -115,17 +115,32 @@ pub(super) fn split_path<T: DictionaryAccess + ?Sized>(
     subset: InfoSubset,
     input: &InputBuffer,
 ) -> SudachiResult<Vec<ResultNode>> {
+    if let Some(source) = &dict.grammar().conn_matrix().selected_source {
+        for node in &path { source.require_word(node.word_id())?; }
+    }
     if mode == Mode::C {
         return Ok(path);
     }
 
     let mut new_path = Vec::with_capacity(path.len() * 3 / 2);
+    let mut changed = false;
     for node in path {
         let split_len = node.num_splits(mode);
         if split_len <= 1 {
             new_path.push(node);
         } else {
-            new_path.extend(node.split(mode, dict.lexicon(), subset, input));
+            changed = true;
+            let split: Vec<_> = node.split(mode, dict.lexicon(), subset, input).collect();
+            if let Some(source) = &dict.grammar().conn_matrix().selected_source {
+                for child in &split { source.require_word(child.word_id())?; }
+            }
+            new_path.extend(split);
+        }
+    }
+
+    if changed {
+        if let Some(source) = &dict.grammar().conn_matrix().selected_source {
+            source.materialize_path(&mut new_path)?;
         }
     }
 

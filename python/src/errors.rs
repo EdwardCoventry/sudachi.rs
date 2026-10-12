@@ -23,6 +23,16 @@ use pyo3::{import_exception, PyResult};
 
 // Sudachi exception class is defined in Python
 import_exception!(sudachipy.errors, SudachiError);
+import_exception!(sudachipy.errors, ProfileConstraintConflict);
+
+pub fn wrap_analysis<T>(v: sudachi::error::SudachiResult<T>) -> PyResult<T> {
+    match v {
+        Ok(value)=>Ok(value),
+        Err(sudachi::error::SudachiError::ProfileConstraintConflict {profile,word_id})=>
+            Err(ProfileConstraintConflict::new_err((profile,word_id))),
+        Err(error)=>Err(SudachiError::new_err(error.to_string())),
+    }
+}
 
 pub fn wrap<T, E: Display>(v: Result<T, E>) -> PyResult<T> {
     match v {

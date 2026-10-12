@@ -111,6 +111,10 @@ impl<'a> Grammar<'a> {
             .update(left_id as u16, right_id as u16, cost);
     }
 
+    pub fn set_selected_source(&mut self, source: crate::dic::selected_source::SelectedSource) {
+        self.connection.selected_source = Some(source);
+    }
+
     /// Returns a pos_id of given pos in the grammar
     pub fn get_part_of_speech_id<S>(&self, pos1: &[S]) -> Option<u16>
     where

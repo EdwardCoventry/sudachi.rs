@@ -18,12 +18,26 @@ use crate::error::{SudachiError, SudachiResult};
 use crate::util::cow_array::CowArray;
 
 pub struct ConnectionMatrix<'a> {
+    pub selected_source: Option<crate::dic::selected_source::SelectedSource>,
     data: CowArray<'a, i16>,
     num_left: usize,
     num_right: usize,
 }
 
 impl<'a> ConnectionMatrix<'a> {
+    pub fn node_cost(&self, node: &crate::analysis::Node) -> i64 {
+        use crate::analysis::node::LatticeNode;
+        node.cost() as i64
+    }
+    pub fn transition(&self, right: u16, left: u16) -> i64 {
+        if let Some(source) = &self.selected_source {
+            // Every admitted node has this model's checked contexts, including OOV.
+            return source.matrix.cost(right, left)
+                .expect("selected-source contexts validated before lattice insertion") as i64;
+        }
+        self.cost(right, left) as i64
+    }
+
     pub fn from_offset_size(
         data: &'a [u8],
         offset: usize,
@@ -38,6 +52,7 @@ impl<'a> ConnectionMatrix<'a> {
         }
 
         Ok(ConnectionMatrix {
+            selected_source: None,
             data: CowArray::from_bytes(data, offset, size),
             num_left,
             num_right,

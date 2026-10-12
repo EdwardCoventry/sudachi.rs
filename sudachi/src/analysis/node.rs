@@ -33,18 +33,18 @@ pub trait RightId {
 
 /// Accessor trait for the full path cost
 pub trait PathCost {
-    fn total_cost(&self) -> i32;
+    fn total_cost(&self) -> i64;
 
     #[inline]
     fn is_connected_to_bos(&self) -> bool {
-        self.total_cost() != i32::MAX
+        self.total_cost() != i64::MAX
     }
 }
 
 pub trait LatticeNode: RightId {
     fn begin(&self) -> usize;
     fn end(&self) -> usize;
-    fn cost(&self) -> i16;
+    fn cost(&self) -> i32;
     fn word_id(&self) -> WordId;
     fn left_id(&self) -> u16;
 
@@ -81,7 +81,7 @@ pub trait LatticeNode: RightId {
 /// Indices are converted to original sentence space when user request them.
 pub struct ResultNode {
     inner: Node,
-    total_cost: i32,
+    total_cost: i64,
     begin_bytes: u16,
     end_bytes: u16,
     word_info: WordInfo,
@@ -90,7 +90,7 @@ pub struct ResultNode {
 impl ResultNode {
     pub fn new(
         inner: Node,
-        total_cost: i32,
+        total_cost: i64,
         begin_bytes: u16,
         end_bytes: u16,
         word_info: WordInfo,
@@ -112,7 +112,7 @@ impl RightId for ResultNode {
 }
 
 impl PathCost for ResultNode {
-    fn total_cost(&self) -> i32 {
+    fn total_cost(&self) -> i64 {
         self.total_cost
     }
 }
@@ -126,7 +126,7 @@ impl LatticeNode for ResultNode {
         self.inner.end()
     }
 
-    fn cost(&self) -> i16 {
+    fn cost(&self) -> i32 {
         self.inner.cost()
     }
 
@@ -166,6 +166,12 @@ impl ResultNode {
 
     pub fn set_char_range(&mut self, begin: u16, end: u16) {
         self.inner.set_range(begin, end)
+    }
+
+    pub(crate) fn set_source_state(&mut self, state: &crate::dic::source_candidates::SourceCandidate,
+                                   total_cost: i64) {
+        self.inner = Node::from_source(self.begin() as u16,self.end() as u16,state);
+        self.total_cost = total_cost;
     }
 
     /// Returns number of splits in a specified mode
@@ -267,7 +273,7 @@ impl Iterator for NodeSplitIterator<'_> {
 
         let inner = Node::new(char_start, char_end, u16::MAX, u16::MAX, i16::MAX, word_id);
 
-        let node = ResultNode::new(inner, i32::MAX, byte_start, byte_end, word_info);
+        let node = ResultNode::new(inner, i64::MAX, byte_start, byte_end, word_info);
 
         self.index += 1;
         Some(node)
