@@ -28,7 +28,7 @@
     "python": [
       {
         "name": "Build and test Python bindings",
-        "command": ["git-bash", "python/build_and_test.sh"],
+        "command": ["python", "python/build_and_test.py"],
         "cwd": "."
       }
     ]

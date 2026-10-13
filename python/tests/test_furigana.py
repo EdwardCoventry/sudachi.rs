@@ -1,7 +1,7 @@
 """Bracketed input preserves spans and treats readings as visible hints."""
 import unittest
 from sudachipy import parse_furigana
-import test_matched_tokens
+from . import test_matched_tokens
 
 
 class FuriganaParserTest(unittest.TestCase):

@@ -32,3 +32,5 @@ workflow filename and OIDC permissions; request that manual release when OIDC is
 Cross-platform checks and release artifacts require the corresponding local
 platform/toolchain, or an explicitly requested hosted matrix run. A local
 Windows result does not certify macOS, Linux, Android, deployed services, or production.
+
+The `python` task builds the native bindings with the installed Rust toolchain and tests them in an isolated `.github/local-output/python-bindings-env` virtual environment. It supports Windows and POSIX Python without changing the active project environment.

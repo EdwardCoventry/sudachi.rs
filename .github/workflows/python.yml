@@ -38,4 +38,4 @@ jobs:
 
       - name: Build and test
         working-directory: ./python
-        run: bash build_and_test.sh
+        run: python build_and_test.py
