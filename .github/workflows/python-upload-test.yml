@@ -1,8 +1,7 @@
 name: Python Packages Test
 
 on:
-  push:
-    branches: [pre/v*]
+  workflow_dispatch:
 
 jobs:
   build-wheels:
@@ -96,7 +95,7 @@ jobs:
         with:
           user: ${{ secrets.PYPI_TEST_USERNAME }}
           password: ${{ secrets.PYPI_TEST_PASSWORD }}
-          repository_url: https://test.pypi.org/legacy/
+          repository-url: https://test.pypi.org/legacy/
           verbose: true
 
   install-and-test:
@@ -105,7 +104,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macOS-latest]
-        target: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
+        target:
+          ["3.9", "3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
         include:
           - os: "ubuntu-latest"
             target: "sdist"

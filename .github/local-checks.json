@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "tasks": {
+    "check": [
+      {
+        "name": "Rust format",
+        "command": ["cargo", "fmt", "--", "--check"],
+        "cwd": "."
+      },
+      {
+        "name": "Rust unit suite",
+        "command": ["cargo", "test", "--verbose"],
+        "cwd": "."
+      },
+      {
+        "name": "Build CLI",
+        "command": ["cargo", "build", "-p", "sudachi-cli"],
+        "cwd": "."
+      }
+    ],
+    "release-check": [
+      {
+        "name": "Rust optimized tests",
+        "command": ["cargo", "test", "--release", "--verbose"],
+        "cwd": "."
+      }
+    ],
+    "python": [
+      {
+        "name": "Build and test Python bindings",
+        "command": ["git-bash", "python/build_and_test.sh"],
+        "cwd": "."
+      }
+    ]
+  }
+}

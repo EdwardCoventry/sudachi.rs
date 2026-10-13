@@ -1,19 +1,17 @@
 name: Rust-Non-Cached
 
 on:
-  schedule:
-    - cron: '0 18 * * *' # run at 18:00 UTC (JST 03:00)
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, windows-latest, macOS-latest ]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
 
     runs-on: ${{ matrix.os }}
 
