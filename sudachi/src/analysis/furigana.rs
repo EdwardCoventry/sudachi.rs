@@ -24,6 +24,24 @@ fn han(ch: char) -> bool {
         || matches!(ch, '々' | '〆' | '〇')
 }
 
+/// ヶ/ヵ between kanji are counter signs inside the kanji run (三ヶ月, 一ヵ所);
+/// elsewhere they may be ordinary small katakana.
+fn counter_sign(ch: char) -> bool {
+    matches!(ch, 'ヶ' | 'ヵ')
+}
+
+fn in_kanji_run(chars: &[char], index: usize) -> bool {
+    han(chars[index]) || (counter_sign(chars[index]) && index > 0 && han(chars[index - 1])
+        && chars.get(index + 1).is_some_and(|next| han(*next)))
+}
+
+/// Letters, digits and standalone ヶ/ヵ may carry a kana reading (ＮＯ[の],
+/// 3[さん], ヶ[が]) but read as themselves when left unannotated.
+fn optional_reading(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || counter_sign(ch)
+        || matches!(ch as u32, 0xff10..=0xff19 | 0xff21..=0xff3a | 0xff41..=0xff5a)
+}
+
 fn kana(ch: char) -> bool {
     matches!(ch as u32, 0x3041..=0x3096 | 0x30a1..=0x30fa | 0x30fc)
 }
@@ -33,7 +51,8 @@ fn invalid(message: &str) -> SudachiError {
 }
 
 /// Kana outside brackets remains in both projections. Annotations apply only to
-/// the immediately preceding complete kanji run. Spans are input evidence, not
+/// the immediately preceding complete kanji run (required) or letter, digit or
+/// standalone ヶ/ヵ run (optional). Spans are input evidence, not
 /// token boundaries or certification that a dictionary supports the reading.
 pub fn parse_furigana(input: &str) -> SudachiResult<FuriganaInput> {
     if input.is_empty() {
@@ -44,10 +63,16 @@ pub fn parse_furigana(input: &str) -> SudachiResult<FuriganaInput> {
     let (mut index, mut text_offset, mut reading_offset) = (0, 0, 0);
     while index < chars.len() {
         let begin = index;
-        let annotated = han(chars[index]);
+        let required = han(chars[index]);
+        let optional = !required && optional_reading(chars[index]);
+        if required {
+            while index < chars.len() && in_kanji_run(&chars, index) { index += 1; }
+        } else if optional {
+            while index < chars.len() && optional_reading(chars[index]) { index += 1; }
+        }
+        let annotated = required || (optional && chars.get(index) == Some(&'['));
         let (surface, reading): (String, String);
         if annotated {
-            while index < chars.len() && han(chars[index]) { index += 1; }
             surface = chars[begin..index].iter().collect();
             if chars.get(index) != Some(&'[') {
                 return Err(invalid("Every kanji run must have an immediate kana annotation in square brackets"));
@@ -61,23 +86,33 @@ pub fn parse_furigana(input: &str) -> SudachiResult<FuriganaInput> {
             reading = chars[reading_begin..index].iter().collect();
             index += 1;
         } else {
-            while index < chars.len() && !han(chars[index]) {
-                if matches!(chars[index], '[' | ']' | '\r' | '\n') {
-                    return Err(invalid("unattached brackets and line breaks are invalid"));
+            if !optional {
+                while index < chars.len() && !han(chars[index]) && !optional_reading(chars[index]) {
+                    if matches!(chars[index], '[' | ']' | '\r' | '\n') {
+                        return Err(invalid("unattached brackets and line breaks are invalid"));
+                    }
+                    index += 1;
                 }
-                index += 1;
             }
             surface = chars[begin..index].iter().collect();
             reading = surface.clone();
         }
+        let (start, reading_start) = (text_offset, reading_offset);
         let end = text_offset + surface.chars().count();
         let reading_end = reading_offset + reading.chars().count();
         result.text.push_str(&surface);
         result.reading.push_str(&reading);
-        result.spans.push(FuriganaSpan { surface, reading, start: text_offset, end,
-            reading_start: reading_offset, reading_end, annotated });
         text_offset = end;
         reading_offset = reading_end;
+        // Unannotated letters/digits and their neighbours stay one plain span.
+        if let Some(last) = result.spans.last_mut().filter(|last| !last.annotated && !annotated) {
+            last.surface.push_str(&surface);
+            last.reading.push_str(&reading);
+            last.end = end;
+            last.reading_end = reading_end;
+            continue;
+        }
+        result.spans.push(FuriganaSpan { surface, reading, start, end, reading_start, reading_end, annotated });
     }
     Ok(result)
 }
@@ -119,6 +154,29 @@ mod tests {
         assert_eq!(parsed.spans[0].surface, "山々");
         assert_eq!(parsed.spans[0].end, 2);
         assert_eq!(parsed.spans[0].reading_end, 4);
+    }
+
+    #[test]
+    fn letters_digits_and_counter_signs_take_readings() {
+        let parsed = parse_furigana("ＮＯ[の]だ。").unwrap();
+        assert_eq!((parsed.text.as_str(), parsed.reading.as_str()), ("ＮＯだ。", "のだ。"));
+        assert!(parsed.spans[0].annotated);
+        let parsed = parse_furigana("三ヶ月[さんかげつ]、関ヶ原[せきがはら]、ヶ[が]、3[さん]人[にん]").unwrap();
+        assert_eq!(parsed.text, "三ヶ月、関ヶ原、ヶ、3人");
+        assert_eq!(parsed.reading, "さんかげつ、せきがはら、が、さんにん");
+        // Outside a kanji run, ヶ/ヵ may simply be small katakana.
+        assert_eq!(parse_furigana("ヵ行[ぎょう]のヶ").unwrap().reading, "ヵぎょうのヶ");
+        assert_eq!(parse_furigana("ヶ[ヶ]").unwrap().reading, "ヶ");
+        for input in ["三ヶ月", "三[さん]ヶ月", "ＮＯ[no]", "ＮＯ[]"] {
+            assert!(parse_furigana(input).is_err(), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn unannotated_letters_merge_into_plain_spans() {
+        let parsed = parse_furigana("はＡＢＣだ").unwrap();
+        assert_eq!(parsed.spans.len(), 1);
+        assert_eq!(parsed.reading, "はＡＢＣだ");
     }
 
     #[test]
